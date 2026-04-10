@@ -1,0 +1,13 @@
+=== ROUTEMATE PROJECT CONTEXT ===
+App: Flutter motorcycle group safety app
+Backend: Firebase (Firestore + Realtime DB + Cloud Functions + FCM)
+Maps: Google Maps Flutter SDK
+Weather: OpenWeatherMap API (via Cloud Function proxy)
+State management: Riverpod (hoặc Provider - tùy nhóm chốt)
+Target: Android 8+ / iOS 13+
+Key constraints: No hardcoded API keys, Distance Filter 50m for GPS, Haversine for distance calc
+Firebase schema: Firestore(rooms/{roomId}: {members, fcmTokens}, alerts/{alertId}: {lat, lng, type, createdAt})
+Realtime DB schema: gps/{roomId}/{memberId}: {lat, lng, updatedAt}
+=== END CONTEXT ===
+
+Lệnh cho AI: "Dưới đây là bối cảnh dự án của tôi. Từ bây giờ, mọi đoạn code bạn sinh ra phải tuân thủ nghiêm ngặt công nghệ và schema này. Không tự ý thêm thư viện ngoài nếu tôi không yêu cầu."
