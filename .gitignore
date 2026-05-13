@@ -120,3 +120,9 @@ app.*.symbols
 
 # Secret Environment Variables
 .env
+
+# --- Rác và Bảo mật của Backend (NodeJS/Firebase) ---
+**/node_modules/
+**/.secret.local
+backend/functions/lib/
+firebase-export-*/
