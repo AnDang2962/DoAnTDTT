@@ -1,0 +1,52 @@
+rules_version = '2';
+
+// ============================================================
+// Firestore Security Rules - RouteMate (v0.5)
+// ============================================================
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAuthed() {
+      return request.auth != null;
+    }
+    function isMember(roomId) {
+      return isAuthed() &&
+             request.auth.uid in get(/databases/$(database)/documents/rooms/$(roomId)).data.members;
+    }
+
+    // === Rooms ===
+    match /rooms/{roomId} {
+      allow read: if isMember(roomId);
+      allow write: if false; // chỉ Cloud Function (Admin SDK) ghi
+
+      match /sosLogs/{logId} {
+        allow read: if isMember(roomId);
+        allow write: if false;
+      }
+    }
+
+    // === User Profile ===
+    match /users/{userId} {
+      allow read: if isAuthed();
+      allow write: if isAuthed() && request.auth.uid == userId;
+    }
+
+    // === Rate limit counters - chỉ server ===
+    match /rateLimits/{key} {
+      allow read, write: if false;
+    }
+
+    // === SOS Idempotency cache - chỉ server ===
+    match /sosIdempotency/{key} {
+      allow read, write: if false;
+    }
+
+    // === Risk Labels (Module 6) ===
+    // Đọc: mọi user authenticated đều đọc được (mục tiêu là crowdsourcing chéo nhóm)
+    // Ghi: chỉ Cloud Function reportRisk (kiểm tra leadership trong code)
+    match /riskLabels/{labelId} {
+      allow read: if isAuthed();
+      allow write: if false;
+    }
+  }
+}
