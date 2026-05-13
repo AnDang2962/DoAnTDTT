@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-
-
+import 'package:route_mate_app/features/main_shell/main_shell_screen.dart';
 
 void main() async {
   // Bắt buộc phải có dòng này khi khởi tạo các thư viện ngoài (như dotenv, Firebase...)
@@ -23,12 +22,8 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
         useMaterial3: true,
-      ),
-      home: const Scaffold(
-        body: Center(
-          child: Text('RouteMate Core đã khởi tạo thành công!'),
-        ),
-      ),
+      ), 
+      home: const MainShellScreen(),  // màn hình chính ban đầu của ứng dụng RouteMate. 
     );
   }
 }
