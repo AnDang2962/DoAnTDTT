@@ -1,0 +1,45 @@
+name: route_mate_app
+description: "RouteMate - Ứng dụng Hỗ trợ An toàn Phượt xe máy"
+publish_to: 'none'
+
+version: 1.0.0+1
+
+# Lấy chuẩn SDK cao nhất để tương thích với máy của M2
+environment:
+  sdk: ^3.11.5
+
+dependencies:
+  flutter:
+    sdk: flutter
+  
+  # --- 1. LÕI HỆ THỐNG & API ---
+  provider: ^6.1.2             # Quản lý state chung (Bắt buộc phải có)
+  flutter_dotenv: ^6.0.1       # Đọc Két sắt .env (Từ file 1)
+  http: ^1.6.0                 # Gọi API ngoại vi (Từ file 1)
+  
+  # --- 2. BACKEND FIREBASE ---
+  firebase_core: ^2.30.0       # Lõi Firebase (Từ file 2)
+  firebase_database: ^10.4.0   # Realtime DB cho Radar GPS (Từ file 2)
+  cloud_firestore: ^4.17.0     # Lưu trữ Room/SOS (Chuẩn bị sẵn cho M3, M4)
+  firebase_messaging: ^14.7.10  # Thông báo đẩy (Chuẩn bị sẵn cho M4)
+  
+  # --- 3. BẢN ĐỒ & ĐỊNH VỊ GPS ---
+  mapbox_maps_flutter: ^2.23.1 # Cố định Mapbox bản mới nhất theo lệnh sếp
+  flutter_map: ^6.1.0          # Giữ lại cho M2 đỡ gãy code (Từ file 2)
+  latlong2: ^0.9.0             # Hỗ trợ tọa độ cho M2 (Từ file 2)
+  geolocator: ^12.0.0          # Lấy bản mới nhất ép cả team dùng chung
+  
+  # --- 4. GIAO DIỆN ---
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  
+  # CHÚ Ý: Bắt buộc giữ lại dòng này để đọc được file .env chứa Mapbox Token
+  assets:
+    - .env
