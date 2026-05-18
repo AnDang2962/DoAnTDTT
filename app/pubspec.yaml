@@ -16,6 +16,7 @@ dependencies:
   flutter_dotenv: ^6.0.1       
   http: ^1.6.0                 
   google_generative_ai: ^0.4.6
+  speech_to_text: ^6.6.2
   
   # --- 2. BACKEND FIREBASE (Giữ bản ổn định) ---
   firebase_core: ^2.30.0       
@@ -31,7 +32,7 @@ dependencies:
   geolocator: ^12.0.0          # Giữ bản 12.0.0 để không bị xung đột
   
   # --- 4. TÍNH NĂNG SOS (Thêm từ M4) ---
-  battery_plus: ^6.1.0         # Check pin
+  battery_plus: ^6.0.2         # Check pin (hạ version để fix lỗi js conflict)
   connectivity_plus: ^6.1.0    # Check mạng (Online/Offline)
   url_launcher: ^6.3.1         # Mở SMS Fallback
   
