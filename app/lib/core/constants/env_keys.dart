@@ -6,4 +6,7 @@ class EnvKeys {
   
   // Lấy Key Thời tiết
   static String get openWeatherApiKey => dotenv.env['OPENWEATHER_API_KEY'] ?? 'THIẾU_OPENWEATHER_KEY';
+
+  // Lấy Key Gemini AI
+  static String get geminiApiKey => dotenv.env['GEMINI_API_KEY'] ?? 'THIẾU_GEMINI_KEY';
 }

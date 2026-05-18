@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'firebase_options.dart';
 import 'package:route_mate_app/features/main_shell/main_shell_screen.dart';
 
 void main() async {
@@ -8,6 +10,11 @@ void main() async {
   
   // Nạp Két sắt .env TRƯỚC KHI chạy app
   await dotenv.load(fileName: ".env");
+
+  // Khởi tạo Firebase
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
 
   runApp(const MyApp());
 }

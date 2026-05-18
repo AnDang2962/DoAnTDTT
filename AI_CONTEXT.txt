@@ -1,13 +1,82 @@
 === ROUTEMATE PROJECT CONTEXT ===
 App: Flutter motorcycle group safety app
 Backend: Firebase (Firestore + Realtime DB + Cloud Functions + FCM)
-Maps: Google Maps Flutter SDK
+Maps: Mapbox Flutter SDK
 Weather: OpenWeatherMap API (via Cloud Function proxy)
 State management: Riverpod (hoặc Provider - tùy nhóm chốt)
 Target: Android 8+ / iOS 13+
 Key constraints: No hardcoded API keys, Distance Filter 50m for GPS, Haversine for distance calc
 Firebase schema: Firestore(rooms/{roomId}: {members, fcmTokens}, alerts/{alertId}: {lat, lng, type, createdAt})
 Realtime DB schema: gps/{roomId}/{memberId}: {lat, lng, updatedAt}
+
+
+
+Mô tả dự án và cấu trúc thư mục hoàn chỉnh: 
+Ý tưởng: ứng dụng sẽ có 3 tab tính năng như đã nói: tab đầu tiên sẽ là tính năng 1: định tuyến: ở tính năng này sẽ giống như ứng dụng gg map,thể hiện bản đồ bằng APi MAPBOX thấy được vị trí người dùng hiện tại. có thể chọn được điểm đến. từ đó có thể tính được khoảng cách, thời gian di chuyển bằng xe. Nếu bấm vào nút bắt đầu di chuyển thì sẽ vẽ cụ thể lộ trình polyline để hiển thị đường đi. Và trên đường đó sẽ có marker thời tiết được lấy từ API weather map, Cùng với đó là tích hợp AI mượn từ api gemini flash để người dùng có thể dùng giọng nói để gán cảnh báo trên đường đi cho các thành viên trong đoàn. Tab thứ 2 sẽ là tính năng Group Radar. khi mở tab này thì sẽ hiện lên các thông tin nhập vào: tên/id; Nhập ID muốn vào; và 2 mode: vào phòng hoặc tạo phòng; chọn role (leader, member, sweeper). Tôi muốn tính năng 2 này phải liên quan đến tính năng 1, khi vào phòng hoặc tạo phòng phải đều mang đầy đủ các tính năng của tính năng 1. và có thêm các chức năng mới là hiển thị các thành viên trên bản đồ chứ không chỉ mình ta như tính năng 1. Cũng phải hiển thị được tất cả marker mà leader báo cáo lên trên tuyến đường. Tính năng số 3 thì sẽ có 1 nút nhấn SOS như tôi đã nói.
+
+Cấu trúc của frontend: 
+lib/
+├── core/                           # [LÕI DÙNG CHUNG TẤT CẢ TÍNH NĂNG]
+│   ├── constants/
+│   │   ├── env_keys.dart           # Két sắt: Mapbox, Weather, Gemini API Key
+│   │   └── app_colors.dart         # Màu sắc chủ đạo của app
+│   ├── utils/
+│   │   ├── map_math.dart           # Thuật toán tính khoảng cách (Haversine)
+│   │   └── time_formatter.dart     # Định dạng thời gian
+│   └── services/                   # Các Service độc lập gọi API ngoài
+│       ├── location_service.dart   # Xin quyền và lấy tọa độ GPS gốc
+│       ├── audio_service.dart      # Xin quyền và quản lý Micro
+│       └── gemini_ai_service.dart  # [AI TỔNG] Phân tích giọng nói cho cảnh báo & tiện ích
+│
+├── data/                           # [TẦNG GIAO TIẾP DATABASE / FIREBASE]
+│   ├── models/
+│   │   ├── user_model.dart         # Object User (ID, Tên, Role: Leader/Member/Sweeper)
+│   │   ├── room_model.dart         # Object Phòng phượt
+│   │   └── warning_marker.dart     # Object Điểm cảnh báo AI tạo ra
+│   └── repositories/
+│       ├── room_repository.dart    # Logic Firebase: Tạo/Vào phòng, Cập nhật vị trí
+│       └── sos_repository.dart     # Logic Firebase: Bắn tín hiệu SOS
+│
+├── features/                       # CODE FRONTEND
+│   │
+│   ├── main_shell/                 # FOLDER CHUYỂN TAB
+│   │   └── main_shell_screen.dart  # CHỨA CODE BottomNavigationBar (3 Tabs)
+│   │
+│   ├── main_map/                   # [BẢN ĐỒ DUY NHẤT - Tab 1 - M2]
+│   │   ├── main_map_screen.dart    # CHỨA DUY NHẤT 1 MAPWIDGET MÀN HÌNH CHÍNH
+│   │   └── widgets/
+│   │       └── map_controls.dart   # Nút la bàn, zoom, nút bấm gọi AI bằng giọng nói
+│   │
+│   ├── map_routing/                # [ĐỊNH TUYẾN - M2]
+│   │   ├── screens/
+│   │   │   └── routing_panel.dart  # TOPSheet nhập điểm đi/đến
+│   │   └── services/
+│   │       ├── routing_api.dart    # Gọi API Mapbox vẽ MAP
+│   │       └── weather_api.dart    # Gọi API OpenWeather lấy thời tiết
+│   │
+│   ├── group_radar/                # [GROUP RADAR - Tab 2 - M3]
+│   │   ├── screens/
+│   │   │   └── room_lobby_screen.dart # Form sảnh chờ: Nhập mã phòng, chọn Role, ID, 
+|    |                # TIẾP TỤC FORM SẢNH CHỜ:   CHỌN MODE: VÀO PHÒNG  HAY TẠO PHÒNG              
+│   │   └── widgets/
+│   │       └── member_list_card.dart  # Danh sách thành viên trong phòng
+│   │
+│   └── sos_emergency/              # [SOS - Tab 3 - M4]
+│       ├── screens/
+│       │   └── sos_history_screen.dart # Lịch sử các lần SOS
+│       └── widgets/
+│           └── sos_button.dart     # Nút báo nạn khẩn cấp
+│
+└── main.dart                       # Khởi tạo .env & Firebase
+Cấu trúc toàn dự án: 
+ 
+Backend thì ở folder RouteMate đã có. 
+
+
+
+
+
+Lệnh cho AI: "Dưới đây là bối cảnh dự án của tôi. Từ bây giờ, mọi đoạn code bạn sinh ra phải tuân thủ nghiêm ngặt công nghệ và schema này. Không tự ý thêm thư viện ngoài nếu tôi không yêu cầu. Khi làm tính năng, code thì phải có unit test cho các tính năng, chú thích để dev có nhận biết unit test."
+
 === END CONTEXT ===
 
-Lệnh cho AI: "Dưới đây là bối cảnh dự án của tôi. Từ bây giờ, mọi đoạn code bạn sinh ra phải tuân thủ nghiêm ngặt công nghệ và schema này. Không tự ý thêm thư viện ngoài nếu tôi không yêu cầu."
