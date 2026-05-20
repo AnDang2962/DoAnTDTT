@@ -1,9 +1,8 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mapbox;
-
+import '../../../core/constants/env_keys.dart';
 /// Component Thanh Tìm kiếm Địa điểm (Sử dụng Mapbox Geocoding API)
 /// Cho phép người dùng gõ tìm tên địa điểm và hiển thị danh sách gợi ý.
 class RoutingSearchBar extends StatefulWidget {
@@ -37,7 +36,7 @@ class _RoutingSearchBarState extends State<RoutingSearchBar> {
       return;
     }
     
-    final token = dotenv.env['MAPBOX_PUBLIC_KEY'] ?? '';
+    final token = EnvKeys.mapboxPublicKey;
     // Giới hạn tìm kiếm ở Việt Nam (country=vn), hỗ trợ tiếng Việt (language=vi)
     final url =
         'https://api.mapbox.com/geocoding/v5/mapbox.places/${Uri.encodeComponent(query)}.json'

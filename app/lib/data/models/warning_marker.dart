@@ -51,12 +51,19 @@ class WarningMarker {
       progressKm: (json['progressKm'] as num?)?.toDouble() ?? 0.0,
     );
   }
-
-  /// Trả về màu sắc cho Bong bóng đánh dấu trên bản đồ tùy theo loại rủi ro
+/// Trả về màu sắc cho Bong bóng đánh dấu trên bản đồ tùy theo loại rủi ro
   Color get color {
     switch (category) {
       case 'WEATHER':
-        return Colors.blue;
+        // Xét thêm subtype để đổi màu theo từng loại thời tiết
+        switch (subtype) {
+          case 'sunny': return Colors.orange;     // Nắng -> Cam
+          case 'cloudy': return Colors.blueGrey;  // Nhiều mây -> Xám
+          case 'rain': return Colors.blue;        // Mưa -> Xanh biển
+          case 'storm': return Colors.deepPurple; // Bão -> Tím
+          case 'fog': return Colors.grey;         // Sương mù -> Xám nhạt
+          default: return Colors.lightBlue;
+        }
       case 'ACCIDENT':
         return Colors.red;
       case 'ROAD_BAD':
@@ -73,7 +80,15 @@ class WarningMarker {
   String get emoji {
     switch (category) {
       case 'WEATHER':
-        return '☔';
+        // Cập nhật emoji tinh gọn
+        switch (subtype) {
+          case 'sunny': return '☀️';
+          case 'cloudy': return '☁️';
+          case 'rain': return '🌧️';
+          case 'storm': return '⛈️';
+          case 'fog': return '🌫️';
+          default: return '🌤️';
+        }
       case 'ACCIDENT':
         return '⚠️';
       case 'ROAD_BAD':
@@ -90,7 +105,15 @@ class WarningMarker {
   IconData get icon {
     switch (category) {
       case 'WEATHER':
-        return Icons.umbrella;
+        // Cập nhật Icon của Flutter theo thời tiết
+        switch (subtype) {
+          case 'sunny': return Icons.wb_sunny;
+          case 'cloudy': return Icons.cloud;
+          case 'rain': return Icons.water_drop;
+          case 'storm': return Icons.thunderstorm;
+          case 'fog': return Icons.foggy;
+          default: return Icons.wb_cloudy;
+        }
       case 'ACCIDENT':
         return Icons.warning;
       case 'ROAD_BAD':

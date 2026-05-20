@@ -3,10 +3,9 @@ import 'package:provider/provider.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mapbox;
 import 'providers/map_state_provider.dart';
 
-/// Lớp Giao diện Bản đồ Chính (Main Map Screen)
-/// Đây là lớp NỀN TẢNG (Background) của toàn bộ ứng dụng. 
-/// Nó chỉ có nhiệm vụ duy nhất: Hiển thị Mapbox và báo cáo cho `MapStateProvider` biết khi nào nó load xong.
-/// Hoàn toàn mù tịt về Firebase hay logic nhóm (Clean Architecture).
+import '../map_routing/screens/routing_panel.dart'; 
+import '../../../core/constants/env_keys.dart'; // Bắt buộc phải có dòng này để lấy Key
+
 class MainMapScreen extends StatefulWidget {
   final mapbox.Position? initialCenter;
   
@@ -17,29 +16,58 @@ class MainMapScreen extends StatefulWidget {
 }
 
 class _MainMapScreenState extends State<MainMapScreen> {
+  
+  @override
+  void initState() {
+    super.initState();
+    // 1. Cung cấp Token cho hệ thống Mapbox ngay khi màn hình vừa mở lên!
+    // Sử dụng đúng EnvKeys.mapboxPublicKey của bạn:
+    mapbox.MapboxOptions.setAccessToken(EnvKeys.mapboxPublicKey);
+  }
+
   @override
   Widget build(BuildContext context) {
-    // MapboxWidget cực kỳ tốn tài nguyên, nên ta không dùng Consumer bọc ngoài nó
-    // để tránh việc nó bị rebuild (vẽ lại) mỗi khi Provider có thay đổi.
-    // Việc cập nhật (vẽ marker, route) sẽ được Provider xử lý ngầm thông qua Manager.
-    
-    return mapbox.MapWidget(
-      cameraOptions: mapbox.CameraOptions(
-        center: mapbox.Point(
-          // Mặc định ở khu vực Quận 1, TP.HCM nếu không có tọa độ GPS ban đầu
-          coordinates: widget.initialCenter ?? mapbox.Position(106.681043, 10.762622),
-        ),
-        zoom: 14.0,
+    return Scaffold(
+      body: Stack(
+        children: [
+          // Ép bản đồ bung full màn hình
+          Positioned.fill(
+            child: mapbox.MapWidget(
+              // 2. Đã xóa dòng resourceOptions gây lỗi ở đây!
+              cameraOptions: mapbox.CameraOptions(
+                center: mapbox.Point(
+                  // Tọa độ Nha Trang
+                  coordinates: widget.initialCenter ?? mapbox.Position(109.1967, 12.2388),
+                ),
+                zoom: 14.0,
+              ),
+              styleUri: mapbox.MapboxStyles.MAPBOX_STREETS,
+              onMapCreated: (mapboxMap) {
+                // 1. Lệnh bật dấu chấm xanh (Location Puck) hiển thị vị trí người dùng
+                mapboxMap.location.updateSettings(
+                  mapbox.LocationComponentSettings(
+                    enabled: true, // Bật chấm xanh
+                    pulsingEnabled: true, // Bật hiệu ứng sóng tỏa ra cho ngầu
+                  ),
+                );
+                mapboxMap.compass.updateSettings(
+                  mapbox.CompassSettings(
+                    position: mapbox.OrnamentPosition.BOTTOM_RIGHT,
+                    marginBottom: 120, // Nâng lên 1 xíu để không bị đè bởi UI
+                    marginRight: 16,
+                  )
+                );
+                context.read<MapStateProvider>().onMapCreated(mapboxMap);
+              },
+            ),
+          ),
+
+          // Lớp UI Overlay (Thanh search trên cùng, Nút bắt đầu dưới đáy)
+          const SafeArea( 
+            child: RoutingPanel(),
+          ),
+        ],
       ),
-      // Sử dụng giao diện bản đồ đường phố tiêu chuẩn của Mapbox
-      styleUri: mapbox.MapboxStyles.MAPBOX_STREETS,
-      
-      // Khi Mapbox khởi tạo xong bộ Engine C++ bên dưới, nó sẽ gọi hàm này.
-      // Ta truyền cái bản đồ vừa tạo cho Provider cất giữ.
-      onMapCreated: (mapboxMap) {
-        // read() thay vì watch() vì ta chỉ gọi 1 lần, không cần lắng nghe thay đổi
-        context.read<MapStateProvider>().onMapCreated(mapboxMap);
-      },
     );
   }
 }

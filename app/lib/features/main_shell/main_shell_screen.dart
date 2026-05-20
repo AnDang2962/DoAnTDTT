@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:route_mate_app/features/main_map/main_map_screen.dart';
+import 'package:provider/provider.dart';
+import 'package:route_mate_app/features/main_map/providers/map_state_provider.dart';
 
 class MainShellScreen extends StatefulWidget {
   const MainShellScreen({super.key});
@@ -13,13 +16,10 @@ class _MainShellScreenState extends State<MainShellScreen> {
 
   // Danh sách các màn hình chờ anh em nhét code vào
   final List<Widget> _screens = [
-    // Lô 1: Tab Bản đồ (M2)
-    const Center(
-      child: Text(
-        'MainMapScreen\n(Khu vực của M2)',
-        textAlign: TextAlign.center,
-        style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-      ),
+    // Lô 1: Tab Bản đồ (M2) - ĐÃ ĐƯỢC BỌC KHO DỮ LIỆU PROVIDER
+    ChangeNotifierProvider(
+      create: (context) => MapStateProvider(),
+      child: const MainMapScreen(),
     ),
     
     // Lô 2: Tab Đội nhóm (M3)

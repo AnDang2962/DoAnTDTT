@@ -4,7 +4,6 @@ import '../../../core/utils/marker_builder.dart';
 import '../../../core/utils/marker_offset.dart';
 import '../../../data/models/warning_marker.dart';
 import 'package:geolocator/geolocator.dart';
-import '../../../data/models/warning_marker.dart';
 
 /// Provider chịu trách nhiệm quản lý toàn bộ trạng thái và các điểm đánh dấu (Markers) trên Mapbox.
 /// Việc tách rời logic vẽ bản đồ vào đây giúp giao diện (UI) gọn gàng hơn
