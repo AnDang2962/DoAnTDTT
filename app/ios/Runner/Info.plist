@@ -26,6 +26,17 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Ứng dụng cần vị trí của bạn để tìm lộ trình đường đi.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>RouteMate cần microphone để bạn báo nguy hiểm bằng giọng nói khi đang lái xe.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>RouteMate dùng nhận diện giọng nói để phân loại nguy hiểm tự động.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -66,7 +77,5 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-	<key>NSLocationWhenInUseUsageDescription</key>
-<string>Ứng dụng cần vị trí của bạn để tìm lộ trình đường đi.</string>
 </dict>
 </plist>

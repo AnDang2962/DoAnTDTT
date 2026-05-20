@@ -8,7 +8,7 @@ class GeminiAiApi {
     if (userInput.isEmpty) return null;
 
     final model = GenerativeModel(
-      model: 'gemini-1.5-flash',
+      model: 'gemini-2.5-flash',
       apiKey: EnvKeys.geminiApiKey,
     );
 
