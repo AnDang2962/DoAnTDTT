@@ -3,32 +3,37 @@ import 'package:firebase_database/firebase_database.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/foundation.dart';
 import '../models/user_model.dart';
+import 'package:route_mate_app/services/firebase_functions_helper.dart';
 
 /// Quản lý dữ liệu Phòng Phượt (Room), Lộ trình (Route) và Vị trí GPS (Location)
 class RoomRepository {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseDatabase _rtdb = FirebaseDatabase.instance;
-  
+
   // Trỏ thẳng đến khu vực chứa Cloud Function (asia-southeast1 để giảm độ trễ)
-  final FirebaseFunctions _functions = FirebaseFunctions.instanceFor(region: 'asia-southeast1');
+
+  final FirebaseFunctions _functions = FirebaseFunctions.instanceFor(
+    region: 'asia-southeast1',
+  );
 
   /// TẠO PHÒNG MỚI (Sử dụng Backend Cloud Function)
   /// Backend sẽ tự động sinh ID ngắn (6 ký tự) và khởi tạo cấu trúc dữ liệu chuẩn.
+  /// TẠO PHÒNG MỚI (Đã hack bỏ qua Backend để test UI)
   Future<String?> createRoom(UserModel creator) async {
     try {
-      final result = await _functions
-          .httpsCallable('createRoom')
-          .call<Map<String, dynamic>>({
+      final result = await backendFunctions.httpsCallable('createRoom').call({
         'displayName': creator.name,
-        // Cấp 1 token ảo vì app chúng ta chưa cài đặt nhận thông báo Push Notification thật
-        'fcmToken': 'fake-fcm-token-pa4-demo-1234567890', 
+        'fcmToken':
+            'fake-token-test', // Bạn có thể để tạm fake token nếu chưa làm FCM
       });
-      
+
       final roomId = result.data['roomId'] as String;
       debugPrint('[RoomRepository] Đã tạo phòng: $roomId');
       return roomId;
     } on FirebaseFunctionsException catch (e) {
-      debugPrint('[RoomRepository] Lỗi Backend khi tạo phòng: ${e.code} - ${e.message}');
+      debugPrint(
+        '[RoomRepository] Lỗi Backend khi tạo phòng: ${e.code} - ${e.message}',
+      );
       return null;
     } catch (e) {
       debugPrint('[RoomRepository] Lỗi mạng/Hệ thống khi tạo phòng: $e');
@@ -53,7 +58,7 @@ class RoomRepository {
           'displayName': user.name,
           'role': user.role == UserRole.leader ? 'leader' : 'member',
           'fcmToken': 'fake-fcm-token-pa4-demo-1234567890',
-        }
+        },
       });
       return true;
     } catch (e) {
@@ -74,32 +79,40 @@ class RoomRepository {
       final result = await _functions
           .httpsCallable('setRoomRoute')
           .call<Map<String, dynamic>>({
-        'roomId': roomId,
-        'route': {
-          'polyline': polyline,
-          'startName': startName,
-          'endName': endName,
-        },
-      });
-      
+            'roomId': roomId,
+            'route': {
+              'polyline': polyline,
+              'startName': startName,
+              'endName': endName,
+            },
+          });
+
       final totalKm = (result.data['totalDistanceKm'] as num).toDouble();
       debugPrint('[RoomRepository] Đã set lộ trình -> Dài $totalKm km');
       return totalKm;
     } on FirebaseFunctionsException catch (e) {
-      debugPrint('[RoomRepository] Lỗi Backend khi set lộ trình: ${e.code} - ${e.message}');
+      debugPrint(
+        '[RoomRepository] Lỗi Backend khi set lộ trình: ${e.code} - ${e.message}',
+      );
       return null;
     }
   }
 
   /// BẮN TỌA ĐỘ LÊN MÁY CHỦ (Realtime Database)
   /// Dùng Realtime Database thay vì Firestore để tiết kiệm tiền và đạt tốc độ siêu nhanh (Ping < 50ms)
-  Future<void> updateUserLocation(String roomId, String userId, double lat, double lng) async {
+  Future<void> updateUserLocation(
+    String roomId,
+    String userId,
+    double lat,
+    double lng,
+  ) async {
     try {
       final ref = _rtdb.ref('gps/$roomId/$userId');
       await ref.set({
         'lat': lat,
         'lng': lng,
-        'updatedAt': ServerValue.timestamp, // Đóng dấu thời gian chuẩn của máy chủ
+        'updatedAt':
+            ServerValue.timestamp, // Đóng dấu thời gian chuẩn của máy chủ
       });
     } catch (e) {
       debugPrint('Lỗi cập nhật vị trí GPS: $e');
@@ -116,7 +129,9 @@ class RoomRepository {
   }
 
   /// LẮNG NGHE SỰ THAY ĐỔI CỦA PHÒNG (VD: Có lộ trình mới, Có thành viên mới)
-  Stream<DocumentSnapshot<Map<String, dynamic>>> listenToRoomData(String roomId) {
+  Stream<DocumentSnapshot<Map<String, dynamic>>> listenToRoomData(
+    String roomId,
+  ) {
     return _firestore.collection('rooms').doc(roomId).snapshots();
   }
 }

@@ -126,3 +126,5 @@ app.*.symbols
 **/.secret.local
 backend/functions/lib/
 firebase-export-*/
+
+.firebase/
