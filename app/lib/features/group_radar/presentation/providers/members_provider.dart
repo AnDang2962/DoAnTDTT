@@ -77,6 +77,24 @@ class MembersProvider extends ChangeNotifier {
   String? _currentUserId;
   String? _currentRole;
 
+  // ===================================================================
+  // 👇 BẮT ĐẦU PHẦN THÊM VÀO ĐỂ KHỚP VỚI NÚT SOS CỦA BẠN 👇
+  // ===================================================================
+  
+  /// Getter: Cho phép file sos_fab.dart "rút" ID động hiện tại của phòng
+  /// Nếu chưa vào phòng (null), sẽ trả về chuỗi rỗng để không bị lỗi app
+  String get roomId => _currentRoomId ?? '';
+
+  /// Setter: Cho phép cập nhật nhanh ID phòng (Nếu có luồng logic cần đổi phòng)
+  void setRoomId(String newRoomId) {
+    _currentRoomId = newRoomId;
+    notifyListeners();
+  }
+
+  // ===================================================================
+  // 👆 KẾT THÚC PHẦN THÊM VÀO 👆
+  // ===================================================================
+
   // Subscription
   StreamSubscription<Position>? _positionSubscription;
   StreamSubscription<List<GpsData>>? _gpsStreamSubscription;

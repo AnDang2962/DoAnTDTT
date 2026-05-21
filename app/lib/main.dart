@@ -22,7 +22,9 @@ void main() async {
   if (kDebugMode) {
     print("Đang kết nối tới Firebase Emulator...");
 
-    String emulatorIp = '192.168.137.1';
+    //String emulatorIp = '192.168.137.1';
+
+    String emulatorIp= '192.168.0.101';
 
     FirebaseAuth.instance.useAuthEmulator(emulatorIp, 9099);
     FirebaseFirestore.instance.useFirestoreEmulator(emulatorIp, 8080);

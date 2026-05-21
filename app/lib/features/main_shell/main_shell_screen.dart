@@ -7,6 +7,7 @@ import 'package:route_mate_app/features/main_map/providers/map_state_provider.da
 
 // 1. IMPORT MÀN HÌNH LOBBY CỦA BẠN VÀO ĐÂY
 import 'package:route_mate_app/features/group_radar/screens/room_lobby_screen.dart';
+import 'package:route_mate_app/features/sos_emergency/screens/sos_screen.dart';
 
 class MainShellScreen extends StatefulWidget {
   const MainShellScreen({super.key});
@@ -31,13 +32,7 @@ class _MainShellScreenState extends State<MainShellScreen> {
     const RoomLobbyScreen(),
 
     // Lô 3: Tab SOS (M4)
-    const Center(
-      child: Text(
-        'SosHistoryScreen\n(Khu vực của M4)',
-        textAlign: TextAlign.center,
-        style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-      ),
-    ),
+    const SosScreen(),
   ];
 
   @override
