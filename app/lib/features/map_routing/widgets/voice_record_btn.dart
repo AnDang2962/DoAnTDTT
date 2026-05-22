@@ -59,28 +59,30 @@ class _VoiceRecordButtonState extends State<VoiceRecordButton> {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        // Nút bấm Mic (Đổi màu và có hiệu ứng thu nhỏ/phóng to khi đang nghe)
+        // Nút bấm Mic 
         GestureDetector(
           onTap: _listen,
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 300),
             padding: EdgeInsets.all(_isListening ? 16 : 12),
             decoration: BoxDecoration(
-              color: _isListening ? Colors.redAccent : const Color.fromARGB(255, 6, 110, 190),
+              // ĐÃ SỬA: Nền trong suốt khi bình thường, nền đỏ khi đang nghe
+              color: _isListening ? Colors.redAccent : Colors.transparent,
               shape: BoxShape.circle,
               boxShadow: _isListening 
                   ? [BoxShadow(color: Colors.red.withOpacity(0.5), blurRadius: 15, spreadRadius: 5)]
-                  : [],
+                  : [], // Xóa bóng mờ khi ở trạng thái bình thường để tệp vào nền
             ),
             child: Icon(
-              _isListening ? Icons.mic : Icons.mic_none,
-              color: Colors.white,
+              _isListening ? Icons.mic : Icons.mic, // Dùng chung 1 icon mic cho đẹp
+              // ĐÃ SỬA: Icon màu xanh khi bình thường, màu trắng khi đang nghe
+              color: _isListening ? Colors.white : Colors.blue,
               size: 28,
             ),
           ),
         ),
         
-        // Hiển thị chữ đang nhận diện theo thời gian thực (để người dùng biết máy đang nghe gì)
+        // Hiển thị chữ đang nhận diện theo thời gian thực
         if (_isListening)
           Padding(
             padding: const EdgeInsets.only(top: 8.0),

@@ -3,16 +3,20 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mapbox;
 import '../../../core/constants/env_keys.dart';
+import 'voice_record_btn.dart'; // ĐÃ THÊM: Import nút ghi âm của bạn
+
 /// Component Thanh Tìm kiếm Địa điểm (Sử dụng Mapbox Geocoding API)
-/// Cho phép người dùng gõ tìm tên địa điểm và hiển thị danh sách gợi ý.
 class RoutingSearchBar extends StatefulWidget {
   final Function(mapbox.Position position, String placeName) onDestinationSelected;
   final VoidCallback onClear;
+  // ĐÃ THÊM: Hàm callback để báo ra ngoài khi người dùng đọc lệnh xong
+  final Function(String spokenText)? onVoiceCommand; 
 
   const RoutingSearchBar({
     Key? key,
     required this.onDestinationSelected,
     required this.onClear,
+    this.onVoiceCommand, // ĐÃ THÊM
   }) : super(key: key);
 
   @override
@@ -29,7 +33,7 @@ class _RoutingSearchBarState extends State<RoutingSearchBar> {
     super.dispose();
   }
 
-  /// Gọi API Mapbox để lấy gợi ý địa điểm
+  /// Gọi API Mapbox để lấy gợi ý địa điểm (GIỮ NGUYÊN 100%)
   Future<void> _fetchSuggestions(String query) async {
     if (query.isEmpty) {
       setState(() => _suggestions = []);
@@ -37,7 +41,6 @@ class _RoutingSearchBarState extends State<RoutingSearchBar> {
     }
     
     final token = EnvKeys.mapboxPublicKey;
-    // Giới hạn tìm kiếm ở Việt Nam (country=vn), hỗ trợ tiếng Việt (language=vi)
     final url =
         'https://api.mapbox.com/geocoding/v5/mapbox.places/${Uri.encodeComponent(query)}.json'
         '?access_token=$token&country=vn&autocomplete=true&language=vi&limit=5';
@@ -66,12 +69,19 @@ class _RoutingSearchBarState extends State<RoutingSearchBar> {
           child: TextField(
             controller: _searchController,
             decoration: InputDecoration(
-              hintText: 'Tìm điểm đến...',
+              hintText: 'Tìm điểm đến hoặc đọc lệnh...', // Sửa lại hint text 1 chút cho rõ ràng
               prefixIcon: const Icon(Icons.search, color: Colors.deepOrange),
               border: InputBorder.none,
               contentPadding: const EdgeInsets.symmetric(vertical: 12),
-              suffixIcon: _searchController.text.isNotEmpty
-                  ? IconButton(
+              
+              // ĐÃ SỬA: Gộp nút X (Clear) và Nút Micro vào chung 1 góc phải
+              suffixIcon: Row(
+                mainAxisSize: MainAxisSize.min, // Rất quan trọng để không bị lỗi layout
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  // Nút X: Chỉ hiện khi có chữ
+                  if (_searchController.text.isNotEmpty)
+                    IconButton(
                       icon: const Icon(Icons.clear),
                       onPressed: () {
                         setState(() {
@@ -80,12 +90,33 @@ class _RoutingSearchBarState extends State<RoutingSearchBar> {
                         });
                         widget.onClear();
                       },
-                    )
-                  : null,
+                    ),
+                  
+                  // Nút Micro: Luôn hiện
+                  Padding(
+                    padding: const EdgeInsets.only(right: 6.0),
+                    child: VoiceRecordButton(
+                      onResult: (spokenText) {
+                        // Điền chữ vào ô tìm kiếm nhưng không gọi Mapbox Suggestion
+                        setState(() {
+                          _searchController.text = spokenText;
+                          _suggestions = []; 
+                        });
+                        // Bắn câu lệnh ra cho RoutingPanel xử lý AI
+                        if (widget.onVoiceCommand != null) {
+                          widget.onVoiceCommand!(spokenText);
+                        }
+                      },
+                    ),
+                  ),
+                ],
+              ),
             ),
             onChanged: _fetchSuggestions,
           ),
         ),
+        
+        // Danh sách gợi ý Mapbox (GIỮ NGUYÊN 100%)
         if (_suggestions.isNotEmpty)
           Card(
             elevation: 4,
@@ -100,12 +131,11 @@ class _RoutingSearchBarState extends State<RoutingSearchBar> {
                   title: Text(item['text']),
                   subtitle: Text(item['place_name'], maxLines: 1, overflow: TextOverflow.ellipsis),
                   onTap: () {
-                    FocusScope.of(context).unfocus(); // Tắt bàn phím
+                    FocusScope.of(context).unfocus(); 
                     setState(() {
                       _searchController.text = item['text'];
-                      _suggestions = []; // Ẩn danh sách gợi ý
+                      _suggestions = []; 
                     });
-                    // Bắn tọa độ ngược ra ngoài cho Map vẽ
                     final lng = item['center'][0].toDouble();
                     final lat = item['center'][1].toDouble();
                     widget.onDestinationSelected(mapbox.Position(lng, lat), item['text']);

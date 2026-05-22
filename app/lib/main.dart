@@ -5,7 +5,7 @@ import 'firebase_options.dart';
 import 'package:route_mate_app/features/main_shell/main_shell_screen.dart';
 
 void main() async {
-  // Bắt buộc phải có dòng này khi khởi tạo các thư viện ngoài (như dotenv, Firebase...)
+  // Bắt buộc phải có dòng này khi khởi tạo các thư viện ngoài
   WidgetsFlutterBinding.ensureInitialized();
   
   // Nạp Két sắt .env TRƯỚC KHI chạy app
@@ -31,7 +31,7 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
         useMaterial3: true,
       ), 
-      home: const MainShellScreen(),  // màn hình chính ban đầu của ứng dụng RouteMate. 
+      home: const MainShellScreen(),  
     );
   }
 }

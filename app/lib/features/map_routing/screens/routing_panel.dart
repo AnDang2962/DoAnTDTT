@@ -21,11 +21,9 @@ class RoutingPanel extends StatefulWidget {
 }
 
 class _RoutingPanelState extends State<RoutingPanel> {
-  final TextEditingController _aiController = TextEditingController();
   
   bool _isLoading = false;
   mapbox.Position? _previewDestPos;
-  String _previewDestName = '';
 
   // BIẾN MỚI CHO HIỂN THỊ THÔNG TIN CHUYẾN ĐI
   bool _isNavigating = false;
@@ -44,31 +42,50 @@ class _RoutingPanelState extends State<RoutingPanel> {
     FocusScope.of(context).unfocus();
     setState(() {
       _previewDestPos = position;
-      _previewDestName = placeName;
       _isNavigating = false; // Tắt chế độ dẫn đường nếu đang có
     });
     await context.read<MapStateProvider>().drawDestinationMarker(position, placeName);
   }
 
-  Future<void> _processAiCommand() async {
-    if (_aiController.text.isEmpty) return;
+  /// HÀM XỬ LÝ LỆNH AI (Đã được nâng cấp để nhận trực tiếp câu nói)
+  Future<void> _processAiCommand(String spokenText) async {
+    // 1. Kiểm tra xem người dùng có nói gì không
+    if (spokenText.trim().isEmpty) return;
+    
+    // 2. Ẩn bàn phím và bật vòng xoay loading
     FocusScope.of(context).unfocus();
     setState(() => _isLoading = true);
 
     try {
-      final aiResult = await GeminiAiApi.analyzeCommand(_aiController.text);
+      // 3. Gửi thẳng câu nói cho AI Gemini xử lý
+      final aiResult = await GeminiAiApi.analyzeCommand(spokenText);
+      
+      print("DỮ LIỆU THỰC TẾ TỪ BACKEND: $aiResult");
       if (aiResult != null) {
         final destName = aiResult['destination'] as String?;
+        
+        // 4. Nếu AI tìm ra tên điểm đến -> Đi lấy tọa độ
         if (destName != null && destName.isNotEmpty) {
            final destPos = await RoutingApi.getCoordinates(destName);
-           if (destPos != null) await _handleDestinationSelected(destPos, destName);
+           
+           // 5. Nếu có tọa độ -> Cắm cờ xem trước
+           if (destPos != null) {
+             await _handleDestinationSelected(destPos, destName);
+           } else {
+             _showToast("Không tìm thấy tọa độ cho: $destName");
+           }
         }
       }
+    } catch (e) {
+      debugPrint("Lỗi xử lý AI: $e");
+      _showToast("Lỗi kết nối AI hoặc mạng!");
     } finally {
+      // 6. Dù thành công hay thất bại cũng phải tắt vòng xoay loading
       setState(() => _isLoading = false);
-      _aiController.clear();
+      // Đã xóa dòng _aiController.clear() vì ta không dùng nó nữa
     }
   }
+
   Future<void> _reportHazardByVoice(String spokenText) async {
     if (spokenText.isEmpty) return;
     
@@ -235,47 +252,11 @@ class _RoutingPanelState extends State<RoutingPanel> {
                       _isNavigating = false;
                     });
                   },
+                  onVoiceCommand: (text) => _processAiCommand(text),
                 ),
-                
-                const SizedBox(height: 12),
-
-                // THANH GIỌNG NÓI & AI (Tách rời theo đúng ý bạn)
-                if (!_isNavigating) // Đang đi thì ẩn thanh AI cho gọn
-                  Card(
-                    elevation: 4,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(25)),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
-                      child: Row(
-                        children: [
-                          VoiceRecordButton(
-                            onResult: (text) {
-                              _aiController.text = text;
-                              _processAiCommand();
-                            },
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: TextField(
-                              controller: _aiController,
-                              decoration: const InputDecoration(
-                                hintText: "Dùng giọng nói hoặc gõ phím...",
-                                border: InputBorder.none,
-                              ),
-                              onSubmitted: (_) => _processAiCommand(),
-                            ),
-                          ),
-                          if (_isLoading) 
-                            const Padding(padding: EdgeInsets.all(8.0), child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)))
-                          else
-                            IconButton(icon: const Icon(Icons.send, color: Colors.blue), onPressed: _processAiCommand),
-                        ],
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
+              ], // <--- PHẢI CÓ DẤU NÀY ĐỂ ĐÓNG COLUMN
+            ), // <--- PHẢI CÓ DẤU NÀY ĐỂ ĐÓNG CONTAINER
+          ), 
         ),
 
         // ===================================
