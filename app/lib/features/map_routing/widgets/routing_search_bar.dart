@@ -3,17 +3,19 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mapbox;
 import '../../../core/constants/env_keys.dart';
+
 /// Component Thanh Tìm kiếm Địa điểm (Sử dụng Mapbox Geocoding API)
 /// Cho phép người dùng gõ tìm tên địa điểm và hiển thị danh sách gợi ý.
 class RoutingSearchBar extends StatefulWidget {
-  final Function(mapbox.Position position, String placeName) onDestinationSelected;
+  final Function(mapbox.Position position, String placeName)
+  onDestinationSelected;
   final VoidCallback onClear;
 
   const RoutingSearchBar({
-    Key? key,
+    super.key,
     required this.onDestinationSelected,
     required this.onClear,
-  }) : super(key: key);
+  });
 
   @override
   State<RoutingSearchBar> createState() => _RoutingSearchBarState();
@@ -35,7 +37,7 @@ class _RoutingSearchBarState extends State<RoutingSearchBar> {
       setState(() => _suggestions = []);
       return;
     }
-    
+
     final token = EnvKeys.mapboxPublicKey;
     // Giới hạn tìm kiếm ở Việt Nam (country=vn), hỗ trợ tiếng Việt (language=vi)
     final url =
@@ -62,7 +64,9 @@ class _RoutingSearchBarState extends State<RoutingSearchBar> {
       children: [
         Card(
           elevation: 4,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(25)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(25),
+          ),
           child: TextField(
             controller: _searchController,
             decoration: InputDecoration(
@@ -96,9 +100,16 @@ class _RoutingSearchBarState extends State<RoutingSearchBar> {
               itemBuilder: (ctx, idx) {
                 final item = _suggestions[idx];
                 return ListTile(
-                  leading: const Icon(Icons.location_pin, color: Colors.deepOrange),
+                  leading: const Icon(
+                    Icons.location_pin,
+                    color: Colors.deepOrange,
+                  ),
                   title: Text(item['text']),
-                  subtitle: Text(item['place_name'], maxLines: 1, overflow: TextOverflow.ellipsis),
+                  subtitle: Text(
+                    item['place_name'],
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                   onTap: () {
                     FocusScope.of(context).unfocus(); // Tắt bàn phím
                     setState(() {
@@ -108,7 +119,10 @@ class _RoutingSearchBarState extends State<RoutingSearchBar> {
                     // Bắn tọa độ ngược ra ngoài cho Map vẽ
                     final lng = item['center'][0].toDouble();
                     final lat = item['center'][1].toDouble();
-                    widget.onDestinationSelected(mapbox.Position(lng, lat), item['text']);
+                    widget.onDestinationSelected(
+                      mapbox.Position(lng, lat),
+                      item['text'],
+                    );
                   },
                 );
               },

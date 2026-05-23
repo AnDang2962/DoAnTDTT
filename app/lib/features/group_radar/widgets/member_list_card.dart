@@ -4,7 +4,7 @@ import '../../../data/models/user_model.dart';
 class MemberListCard extends StatelessWidget {
   final List<UserModel> members;
 
-  const MemberListCard({Key? key, required this.members}) : super(key: key);
+  const MemberListCard({super.key, required this.members});
 
   @override
   Widget build(BuildContext context) {

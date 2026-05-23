@@ -19,11 +19,13 @@ import '../../../core/utils/geo_utils.dart';
 class GroupRadarOverlay extends StatefulWidget {
   final String roomId;
   final UserModel currentUser;
+  final VoidCallback onLeaveRoom;
 
   const GroupRadarOverlay({
     Key? key,
     required this.roomId,
     required this.currentUser,
+    required this.onLeaveRoom,
   }) : super(key: key);
 
   @override
@@ -411,7 +413,7 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
             child: FloatingActionButton(
               heroTag: 'back_fab',
               backgroundColor: Colors.white,
-              onPressed: () => Navigator.of(context).pop(),
+              onPressed: widget.onLeaveRoom,
               child: const Icon(Icons.arrow_back, color: Colors.black),
             ),
           ),
