@@ -36,9 +36,11 @@ dependencies:
   battery_plus: ^6.0.2         # Check pin (hạ version để fix lỗi js conflict)
   connectivity_plus: ^6.1.0    # Check mạng (Online/Offline)
   url_launcher: ^6.3.1         # Mở SMS Fallback
+
   
   # --- 5. GIAO DIỆN ---
   cupertino_icons: ^1.0.8
+  timeago: ^3.6.1       # 🔥 THÊM DÒNG NÀY ĐỂ RENDER THỜI GIAN SOS 🔥
 
 dev_dependencies:
   flutter_test:
