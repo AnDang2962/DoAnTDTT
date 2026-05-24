@@ -19,6 +19,8 @@ void main() async {
   // Khởi tạo Firebase
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
+  // code cũ khi tạo phòng còn qua Backend
+  /*
   if (kDebugMode) {
     print("Đang kết nối tới Firebase Emulator...");
 
@@ -32,6 +34,7 @@ void main() async {
       region: 'asia-southeast1',
     ).useFunctionsEmulator(emulatorIp, 5001);
   }
+  */
 
   // 🔥 THÊM ĐOẠN NÀY VÀO TRƯỚC KHI RUN APP 🔥
   if (FirebaseAuth.instance.currentUser == null) {

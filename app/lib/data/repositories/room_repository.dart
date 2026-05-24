@@ -1,3 +1,4 @@
+import 'dart:math'; // 🔥 THÊM THƯ VIỆN NÀY ĐỂ RANDOM
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:cloud_functions/cloud_functions.dart';
@@ -10,31 +11,53 @@ class RoomRepository {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseDatabase _rtdb = FirebaseDatabase.instance;
 
-  // Trỏ thẳng đến khu vực chứa Cloud Function (asia-southeast1 để giảm độ trễ)
-
+  // Dù không dùng nữa nhưng cứ giữ lại để không bị lỗi các module khác
   final FirebaseFunctions _functions = FirebaseFunctions.instanceFor(
     region: 'asia-southeast1',
   );
 
-  /// TẠO PHÒNG MỚI (Sử dụng Backend Cloud Function)
-  /// Backend sẽ tự động sinh ID ngắn (6 ký tự) và khởi tạo cấu trúc dữ liệu chuẩn.
-  /// TẠO PHÒNG MỚI (Đã hack bỏ qua Backend để test UI)
+  /// TẠO PHÒNG MỚI (Frontend tự sinh mã, ghi thẳng lên Firestore)
   Future<String?> createRoom(UserModel creator) async {
     try {
-      final result = await backendFunctions.httpsCallable('createRoom').call({
-        'displayName': creator.name,
-        'fcmToken':
-            'fake-token-test', // Bạn có thể để tạm fake token nếu chưa làm FCM
+      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+      final random = Random();
+      String roomId = '';
+      bool isDuplicate = true;
+
+      // Vòng lặp check trùng mã phòng
+      while (isDuplicate) {
+        roomId = String.fromCharCodes(
+          Iterable.generate(
+            6,
+            (_) => chars.codeUnitAt(random.nextInt(chars.length)),
+          ),
+        );
+
+        final docSnap = await _firestore.collection('rooms').doc(roomId).get();
+        if (!docSnap.exists) {
+          isDuplicate = false; // Mã sạch, an toàn để tạo
+        }
+      }
+
+      // Ghi cấu trúc phòng lên Firestore
+      await _firestore.collection('rooms').doc(roomId).set({
+        'createdAt': FieldValue.serverTimestamp(),
+        'creatorId': creator.id, // Lưu ID Leader để dễ quản lý sau này
+        'status': 'active',
+        'route': null,
+        'memberInfo': {
+          creator.id: {
+            'displayName': creator.name,
+            'role': creator.role == UserRole.leader ? 'leader' : 'member',
+            'joinedAt': FieldValue.serverTimestamp(),
+          },
+        },
       });
 
-      final roomId = result.data['roomId'] as String;
-      debugPrint('[RoomRepository] Đã tạo phòng: $roomId');
-      return roomId;
-    } on FirebaseFunctionsException catch (e) {
       debugPrint(
-        '[RoomRepository] Lỗi Backend khi tạo phòng: ${e.code} - ${e.message}',
+        '[RoomRepository] Đã tạo phòng Client-side thành công: $roomId',
       );
-      return null;
+      return roomId;
     } catch (e) {
       debugPrint('[RoomRepository] Lỗi mạng/Hệ thống khi tạo phòng: $e');
       return null;
@@ -52,12 +75,12 @@ class RoomRepository {
         return false;
       }
 
-      // Theo chuẩn Demo, Backend dùng cấu trúc Map 'memberInfo' thay vì List
+      // Cập nhật member mới vào Map memberInfo
       await docRef.update({
         'memberInfo.${user.id}': {
           'displayName': user.name,
           'role': user.role == UserRole.leader ? 'leader' : 'member',
-          'fcmToken': 'fake-fcm-token-pa4-demo-1234567890',
+          'joinedAt': FieldValue.serverTimestamp(),
         },
       });
       return true;
@@ -67,8 +90,7 @@ class RoomRepository {
     }
   }
 
-  /// CHIA SẺ LỘ TRÌNH CHO CẢ NHÓM (Sử dụng Backend Cloud Function)
-  /// Chỉ Leader mới được gọi hàm này. Backend sẽ lưu lộ trình và tự thông báo cho các máy khác.
+  /// CHIA SẺ LỘ TRÌNH CHO CẢ NHÓM (Cập nhật trực tiếp lên Firestore)
   Future<double?> setRoomRoute({
     required String roomId,
     required List<Map<String, double>> polyline,
@@ -76,30 +98,24 @@ class RoomRepository {
     required String endName,
   }) async {
     try {
-      final result = await _functions
-          .httpsCallable('setRoomRoute')
-          .call<Map<String, dynamic>>({
-            'roomId': roomId,
-            'route': {
-              'polyline': polyline,
-              'startName': startName,
-              'endName': endName,
-            },
-          });
+      // 🔥 M3 XỬ LÝ: Update route thẳng lên Firestore thay vì gọi Backend M5
+      await _firestore.collection('rooms').doc(roomId).update({
+        'route': {
+          'polyline': polyline,
+          'startName': startName,
+          'endName': endName,
+        },
+      });
 
-      final totalKm = (result.data['totalDistanceKm'] as num).toDouble();
-      debugPrint('[RoomRepository] Đã set lộ trình -> Dài $totalKm km');
-      return totalKm;
-    } on FirebaseFunctionsException catch (e) {
-      debugPrint(
-        '[RoomRepository] Lỗi Backend khi set lộ trình: ${e.code} - ${e.message}',
-      );
+      debugPrint('[RoomRepository] Đã chia sẻ lộ trình cho nhóm');
+      return 0.0; // Trả về 0 tạm thời vì M2 đã tự tính totalKm ở giao diện rồi
+    } catch (e) {
+      debugPrint('[RoomRepository] Lỗi khi set lộ trình: $e');
       return null;
     }
   }
 
   /// BẮN TỌA ĐỘ LÊN MÁY CHỦ (Realtime Database)
-  /// Dùng Realtime Database thay vì Firestore để tiết kiệm tiền và đạt tốc độ siêu nhanh (Ping < 50ms)
   Future<void> updateUserLocation(
     String roomId,
     String userId,
@@ -108,11 +124,14 @@ class RoomRepository {
   ) async {
     try {
       final ref = _rtdb.ref('gps/$roomId/$userId');
+
+      // Xóa điểm GPS nếu rớt mạng (Chống "Bóng ma")
+      await ref.onDisconnect().remove();
+
       await ref.set({
         'lat': lat,
         'lng': lng,
-        'updatedAt':
-            ServerValue.timestamp, // Đóng dấu thời gian chuẩn của máy chủ
+        'updatedAt': ServerValue.timestamp,
       });
     } catch (e) {
       debugPrint('Lỗi cập nhật vị trí GPS: $e');
@@ -128,7 +147,7 @@ class RoomRepository {
     });
   }
 
-  /// LẮNG NGHE SỰ THAY ĐỔI CỦA PHÒNG (VD: Có lộ trình mới, Có thành viên mới)
+  /// LẮNG NGHE SỰ THAY ĐỔI CỦA PHÒNG (Lộ trình mới, Thành viên mới)
   Stream<DocumentSnapshot<Map<String, dynamic>>> listenToRoomData(
     String roomId,
   ) {

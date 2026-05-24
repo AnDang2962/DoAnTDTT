@@ -5,7 +5,7 @@ import '../../../data/models/user_model.dart';
 import '../../../data/repositories/room_repository.dart';
 
 class RoomLobbyScreen extends StatefulWidget {
-  const RoomLobbyScreen({Key? key}) : super(key: key);
+  const RoomLobbyScreen({super.key});
 
   @override
   State<RoomLobbyScreen> createState() => _RoomLobbyScreenState();
@@ -20,7 +20,6 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
   final TextEditingController _roomController = TextEditingController();
   final RoomRepository _roomRepo = RoomRepository();
 
-  // 🔥 2 BIẾN MỚI ĐỂ QUẢN LÝ TRẠNG THÁI TRONG TAB
   String? activeRoomId;
   UserModel? activeUser;
 
@@ -64,13 +63,12 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
         finalRoomId = await _roomRepo.createRoom(dummyUser);
         if (finalRoomId == null) throw Exception('Tạo phòng thất bại!');
       } else {
-        finalRoomId = _roomController.text.trim();
-        // Giả lập join room thành công cho Bypass
-        // final success = await _roomRepo.joinRoom(finalRoomId, dummyUser);
-        // if (!success) throw Exception('Phòng không tồn tại!');
+        // 🔥 M3 XỬ LÝ: Mở khóa hàm joinRoom và bắt buộc viết hoa mã phòng
+        finalRoomId = _roomController.text.trim().toUpperCase();
+        final success = await _roomRepo.joinRoom(finalRoomId, dummyUser);
+        if (!success) throw Exception('Phòng không tồn tại hoặc lỗi kết nối!');
       }
 
-      // 🔥 THÀNH CÔNG -> Cập nhật State thay vì Navigator.push
       if (mounted && finalRoomId != null) {
         setState(() {
           activeRoomId = finalRoomId;
@@ -90,13 +88,11 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // 🔥 NẾU ĐÃ VÀO PHÒNG -> HIỂN THỊ BẢN ĐỒ RADAR (VẪN GIỮ ĐƯỢC 3 TAB Ở DƯỚI)
     if (activeRoomId != null && activeUser != null) {
       return GroupRadarOverlay(
         roomId: activeRoomId!,
         currentUser: activeUser!,
         onLeaveRoom: () {
-          // Bấm nút Back -> Xóa state, quay lại Lobby
           setState(() {
             activeRoomId = null;
             activeUser = null;
@@ -105,8 +101,8 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
       );
     }
 
-    // NẾU CHƯA VÀO PHÒNG -> HIỂN THỊ LOBBY
     return Scaffold(
+      backgroundColor: Colors.white, // THÊM DÒNG NÀY ĐỂ CHE KÍN BẢN ĐỒ
       appBar: AppBar(title: const Text('Group Radar Lobby')),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
@@ -147,6 +143,8 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
               const SizedBox(height: 16),
               TextField(
                 controller: _roomController,
+                textCapitalization:
+                    TextCapitalization.characters, // Tự động viết hoa bàn phím
                 decoration: const InputDecoration(
                   labelText: 'Mã phòng (Lấy từ Leader)',
                   border: OutlineInputBorder(),
