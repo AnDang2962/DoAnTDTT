@@ -1,43 +1,39 @@
-import 'dart:convert';
-import 'package:google_generative_ai/google_generative_ai.dart';
-import '../../../core/constants/env_keys.dart';
+import 'package:cloud_functions/cloud_functions.dart';
+import 'package:flutter/foundation.dart';
+import 'package:route_mate_app/core/firebase_functions_helper.dart';
 
 class GeminiAiApi {
-  /// Phân tích văn bản (được chuyển từ giọng nói) để tìm điểm đến và rủi ro
-  static Future<Map<String, dynamic>?> analyzeCommand(String userInput) async {
-    if (userInput.isEmpty) return null;
-
-    final model = GenerativeModel(
-      model: 'gemini-2.5-flash',
-      apiKey: EnvKeys.geminiApiKey,
-    );
-
-    // Prompt ép Gemini trả về đúng format JSON theo chuẩn WarningMarker
-    final prompt = '''
-      Bạn là AI phân tích hành trình cho app phượt. Người dùng nói: "$userInput".
-      Trả về CHÍNH XÁC định dạng JSON sau, không có text dư thừa:
-      {
-        "destination": "Tên địa điểm đến (nếu có)",
-        "risks": [
-          {
-            "category": "WEATHER", 
-            "vi": "Mưa lớn/Đường trơn (Tóm tắt sự cố)",
-            "lat": 12.2388,
-            "lng": 109.1967
-          }
-        ]
-      }
-      Lưu ý: "category" CHỈ ĐƯỢC PHÉP chọn 1 trong 5 chữ: WEATHER, ACCIDENT, ROAD_BAD, POLICE, HAZARD_OTHER. Tự ước lượng tọa độ gần đúng.
-    ''';
-
+  /// Hàm gọi AI Backend để phân tích giọng nói
+  static Future<Map<String, dynamic>?> analyzeCommand(
+    String spokenText, {
+    String? roomId,
+    double? currentLat,
+    double? currentLng,
+  }) async {
     try {
-      final response = await model.generateContent([Content.text(prompt)]);
-      // Dọn dẹp cục text trả về để lấy chuẩn JSON
-      String rawText = response.text ?? '{}';
-      rawText = rawText.replaceAll('```json', '').replaceAll('```', '').trim();
-      return json.decode(rawText);
+      // Đóng gói data theo đúng chuẩn Backend yêu cầu
+      final result = await backendFunctions.httpsCallable('voiceCommand').call({
+        'text': spokenText,
+        'context': {
+          if (roomId != null) 'roomId': roomId,
+          if (currentLat != null) 'currentLat': currentLat,
+          if (currentLng != null) 'currentLng': currentLng,
+        },
+      });
+
+      final data = result.data as Map;
+
+      // Bóc tách kết quả từ Backend trả về
+      return {
+        'intent': data['intent'], // Ví dụ: 'query_progress', 'report_risk', 'navigate'
+        'response': data['response'], // Lời đáp của AI (nếu có)
+        'destination': data['action']?['destinationName'], // Tên địa điểm nếu intent là tìm đường
+      };
+    } on FirebaseFunctionsException catch (e) {
+      debugPrint('[GeminiAiApi] Lỗi gọi AI Backend: ${e.code} - ${e.message}');
+      return null;
     } catch (e) {
-      print('Lỗi AI Gemini: $e');
+      debugPrint('[GeminiAiApi] Lỗi hệ thống: $e');
       return null;
     }
   }
