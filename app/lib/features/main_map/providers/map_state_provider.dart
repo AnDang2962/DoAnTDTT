@@ -149,7 +149,44 @@ class MapStateProvider extends ChangeNotifier {
     }
   }
 
-  /// 4. VẼ CÁC CẢNH BÁO RỦI RO (Có thuật toán chống đè)
+  /// 4a. VẼ THỜI TIẾT (lưu riêng _weatherMarkers, không bị xóa khi vẽ risk)
+  Future<void> drawWeatherMarkers(List<WarningMarker> weatherList) async {
+    if (_pointManager == null) return;
+
+    for (final m in _weatherMarkers) {
+      try { await _pointManager!.delete(m); } catch (_) {}
+    }
+    _weatherMarkers.clear();
+
+    final occupiedPositions = <mapbox.Position>[];
+    if (_destinationPosition != null) occupiedPositions.add(_destinationPosition!);
+    for (final m in _memberMarkers) { occupiedPositions.add(m.geometry.coordinates); }
+    for (final m in _riskMarkers) { occupiedPositions.add(m.geometry.coordinates); }
+
+    for (final w in weatherList) {
+      final adjustedPos = MarkerOffsetHelper.adjustForOverlap(
+        existingPositions: occupiedPositions,
+        newLat: w.lat,
+        newLng: w.lng,
+      );
+      final image = await MarkerBuilder.buildBubble(
+        emoji: w.emoji,
+        label: w.vi,
+        color: w.color,
+      );
+      final annotation = await _pointManager!.create(
+        mapbox.PointAnnotationOptions(
+          geometry: mapbox.Point(coordinates: adjustedPos),
+          image: image,
+          iconAnchor: mapbox.IconAnchor.BOTTOM,
+        ),
+      );
+      _weatherMarkers.add(annotation);
+      occupiedPositions.add(adjustedPos);
+    }
+  }
+
+  /// 4b. VẼ CÁC CẢNH BÁO RỦI RO (Có thuật toán chống đè)
   Future<void> drawRiskMarkers(List<WarningMarker> risks, Map<String, mapbox.Position> memberLocations) async {
     if (_pointManager == null) return;
 

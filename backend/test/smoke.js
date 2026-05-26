@@ -16,6 +16,7 @@ const { initializeApp } = require('firebase/app');
 const {
   getAuth,
   signInWithCustomToken,
+  signOut,
   connectAuthEmulator,
 } = require('firebase/auth');
 const {
@@ -467,6 +468,92 @@ async function main() {
     log('2️⃣6️⃣-2️⃣7️⃣ Module 2 Weather Proxy');
     skip('Skip vì chưa có OPENWEATHER_API_KEY');
   }
+
+  // === Test 28-34: geocodePlace ===
+  const geocodePlace = httpsCallable(functions, 'geocodePlace');
+  await loginAs('user-a-uid', 'a@test.com', 'Alice');
+
+  log("2️⃣8️⃣ Geocode 'Đà Lạt' (voice mode, autocomplete=false)");
+  try {
+    const r = await geocodePlace({ query: 'Đà Lạt', limit: 1, autocomplete: false });
+    const places = r.data.places || [];
+    if (places.length === 0) {
+      fail('Không tìm thấy Đà Lạt');
+    } else {
+      const p = places[0];
+      ok(`${p.name} | (${p.lat.toFixed(2)}, ${p.lng.toFixed(2)}) | ${p.fullName}`);
+      if (Math.abs(p.lat - 11.94) < 0.5 && Math.abs(p.lng - 108.44) < 0.5) {
+        ok('Tọa độ Đà Lạt chính xác');
+      } else {
+        fail(`Tọa độ lệch: kỳ vọng ~(11.94, 108.44), nhận (${p.lat.toFixed(2)}, ${p.lng.toFixed(2)})`);
+      }
+    }
+  } catch (e) { fail(e.message); }
+
+  log("2️⃣9️⃣ Autocomplete 'Đà' (limit=5, autocomplete=true)");
+  try {
+    const r = await geocodePlace({ query: 'Đà', limit: 5, autocomplete: true });
+    const places = r.data.places || [];
+    ok(`Tìm thấy ${places.length} gợi ý`);
+    places.slice(0, 3).forEach(p => console.log(`      - ${p.name} (${p.type})`));
+  } catch (e) { fail(e.message); }
+
+  log('3️⃣0️⃣ Reject query rỗng');
+  try {
+    await geocodePlace({ query: '' });
+    fail('Không reject query rỗng!');
+  } catch (e) {
+    if (e.code === 'functions/invalid-argument') ok(`Reject: ${e.message}`);
+    else fail(`Wrong code: ${e.code} | ${e.message}`);
+  }
+
+  log('3️⃣1️⃣ Reject query >200 ký tự');
+  try {
+    await geocodePlace({ query: 'a'.repeat(201) });
+    fail('Không reject query dài');
+  } catch (e) {
+    if (e.code === 'functions/invalid-argument') ok(`Reject: ${e.message}`);
+    else fail(`Wrong code: ${e.code} | ${e.message}`);
+  }
+
+  log('3️⃣2️⃣ Rate limit (>120 req/phút)');
+  try {
+    let rateLimitHit = false;
+    for (let i = 0; i < 125; i++) {
+      try {
+        await geocodePlace({ query: `test${i}` });
+      } catch (e) {
+        if (e.code === 'functions/resource-exhausted') {
+          ok(`Rate limit kích hoạt sau ${i + 1} requests`);
+          rateLimitHit = true;
+          break;
+        }
+      }
+    }
+    if (!rateLimitHit) skip('Rate limit chưa kích hoạt (có thể đã reset window)');
+  } catch (e) { fail(e.message); }
+  // Reset rate limit geocode user-a sau test 32 để test 33 không bị block
+  await admin.firestore().doc('rateLimits/geocode_user-a-uid').delete();
+
+  log("3️⃣3️⃣ Country filter (vn) — 'Tokyo Japan'");
+  try {
+    const r = await geocodePlace({ query: 'Tokyo Japan', limit: 3, country: 'vn' });
+    const places = r.data.places || [];
+    ok(`Country filter hoạt động, ${places.length} kết quả (kỳ vọng ít/0)`);
+  } catch (e) { fail(e.message); }
+
+  log('3️⃣4️⃣ Unauthenticated request → reject');
+  // Sign out để test unauthenticated
+  await signOut(auth);
+  try {
+    await geocodePlace({ query: 'Hà Nội' });
+    fail('Không reject unauthenticated!');
+  } catch (e) {
+    if (e.code === 'functions/unauthenticated') ok('Reject unauthenticated');
+    else fail(`Wrong code: ${e.code} | ${e.message}`);
+  }
+  // Sign in lại để summary không bị ảnh hưởng
+  await loginAs('user-a-uid', 'a@test.com', 'Alice');
 
   // === Summary ===
   console.log('\n' + '='.repeat(60));

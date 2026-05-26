@@ -107,6 +107,7 @@ async function saveRiskLabel(params: {
   await ref.set({
     category: params.category,
     subtype: params.subtype,
+    vi: cfg.vi,
     baseSeverity: severity,
     lat: params.lat,
     lng: params.lng,

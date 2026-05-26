@@ -32,6 +32,9 @@ export { computeFatigueScore, checkGroupGap } from './radar';
 // === Module 5: AI Trip Copilot (NEW) ===
 export { voiceCommand, describeSosLocation } from './ai';
 
+// === Module 7: Geocoding (Mapbox proxy) ===
+export { geocodePlace } from './geocode';
+
 // === Module 6: Risk Labels (Crowdsourced Hazards) ===
 export {
   reportRiskLabel,
@@ -48,7 +51,7 @@ export const healthCheck = onRequest(
       status: 'ok',
       service: 'routemate-backend',
       timestamp: new Date().toISOString(),
-      modules: ['sos', 'weather', 'rooms', 'radar', 'ai', 'risk'],
+      modules: ['sos', 'weather', 'rooms', 'radar', 'ai', 'risk', 'geocode'],
       version: '0.5.1-risk-tap',
     });
   }

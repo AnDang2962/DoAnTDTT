@@ -22,6 +22,7 @@ interface WeatherResult {
   lat: number;
   lng: number;
   tempC: number;
+  humidity: number;
   weatherMain: string;
   description: string;
   isDangerous: boolean;
@@ -85,6 +86,7 @@ export const getWeatherAlongRoute = onCall<
         lat,
         lng,
         tempC: w.main?.temp ?? 0,
+        humidity: w.main?.humidity ?? 0,
         weatherMain: w.weather?.[0]?.main ?? 'Unknown',
         description: w.weather?.[0]?.description ?? '',
         isDangerous,

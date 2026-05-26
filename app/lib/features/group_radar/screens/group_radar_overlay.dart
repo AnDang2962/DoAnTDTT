@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mapbox;
 
+// TODO: Đổi lại các đường dẫn import này cho đúng với cấu trúc của nhóm bạn
 import '../../../data/models/user_model.dart';
 import '../../../data/models/warning_marker.dart';
 import '../../../data/repositories/room_repository.dart';
@@ -11,20 +13,21 @@ import '../../../data/repositories/warning_repository.dart';
 import '../../main_map/main_map_screen.dart';
 import '../../main_map/providers/map_state_provider.dart';
 import '../../map_routing/widgets/routing_search_bar.dart';
+import '../../map_routing/services/weather_api.dart';
 import '../widgets/voice_fab.dart';
 import '../../../core/utils/route_utils.dart';
 import '../../../core/utils/geo_utils.dart';
 
-/// Màn hình Lõi của ứng dụng: Nhúng Main Map và phủ lên các tính năng (Overlays)
-/// Nó đóng vai trò "Nhạc trưởng" điều phối dữ liệu từ Firebase và ra lệnh cho MapStateProvider vẽ.
 class GroupRadarOverlay extends StatefulWidget {
   final String roomId;
   final UserModel currentUser;
+  final VoidCallback onLeaveRoom;
 
   const GroupRadarOverlay({
     Key? key,
     required this.roomId,
     required this.currentUser,
+    required this.onLeaveRoom,
   }) : super(key: key);
 
   @override
@@ -41,13 +44,15 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
   StreamSubscription? _warningsSub;
 
   mapbox.Position? _myLastPos;
-  
-  // Lưu trữ dữ liệu lấy từ Firebase
-  Map<String, dynamic> _memberInfo = {}; // Chứa tên, vai trò của các thành viên
-  Map<String, mapbox.Position> _memberLocations = {}; // Chứa tọa độ GPS của thành viên
-  List<WarningMarker> _riskLabels = []; // Các cảnh báo nguy hiểm trên đường
 
-  bool _isTooFar = false; // Cờ cảnh báo đứt đội hình
+  Map<String, dynamic> _memberInfo = {};
+  Map<String, mapbox.Position> _memberLocations = {};
+  List<WarningMarker> _riskLabels = [];
+
+  bool _isTooFar = false;
+
+  // THÊM BIẾN NÀY ĐỂ QUẢN LÝ THU/MỞ BẢNG THÔNG TIN
+  bool _isInfoExpanded = false;
 
   @override
   void initState() {
@@ -56,94 +61,100 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
     _listenToFirebaseStreams();
   }
 
-  /// 1. Liên tục lấy GPS của máy mình và bắn lên Realtime DB
   void _startMyGpsTracker() {
-    _gpsSub = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 10, // Di chuyển 10 mét thì cập nhật 1 lần
-      ),
-    ).listen((pos) {
-      _myLastPos = mapbox.Position(pos.longitude, pos.latitude);
-      
-      // Bắn lên Firebase Realtime DB
-      _roomRepo.updateUserLocation(
-        widget.roomId, 
-        widget.currentUser.id, 
-        pos.latitude, 
-        pos.longitude
-      );
+    _gpsSub =
+        Geolocator.getPositionStream(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            distanceFilter: 10,
+          ),
+        ).listen((pos) {
+          _myLastPos = mapbox.Position(pos.longitude, pos.latitude);
 
-      // Kiểm tra xem mình có đi quá xa đội hình không
-      _checkFormationDistance();
-    });
+          _roomRepo.updateUserLocation(
+            widget.roomId,
+            widget.currentUser.id,
+            pos.latitude,
+            pos.longitude,
+          );
+
+          _checkFormationDistance();
+        });
   }
 
-  /// 2. Lắng nghe mọi thứ từ Firebase (Người khác đi tới đâu, ai vừa báo ổ gà...)
   void _listenToFirebaseStreams() {
-    // A. Lắng nghe thông tin phòng (Để lấy lộ trình và danh sách thành viên)
-    _roomDataSub = _roomRepo.listenToRoomData(widget.roomId).listen((doc) async {
+    // 1. Lắng nghe dữ liệu phòng
+    _roomDataSub = _roomRepo.listenToRoomData(widget.roomId).listen((
+      doc,
+    ) async {
       if (!doc.exists) return;
       final data = doc.data()!;
-      
-      // Cập nhật thông tin thành viên
-      _memberInfo = data['memberInfo'] as Map<String, dynamic>? ?? {};
 
-      // Vẽ lộ trình nếu Leader đã tạo lộ trình
+      setState(() {
+        _memberInfo = data['memberInfo'] as Map<String, dynamic>? ?? {};
+      });
+
       final routeData = data['route'] as Map<String, dynamic>?;
       if (routeData != null && routeData['polyline'] != null) {
         final polyList = routeData['polyline'] as List;
-        final coords = polyList.map((p) => mapbox.Position(
-          (p['lng'] as num).toDouble(),
-          (p['lat'] as num).toDouble()
-        )).toList();
-        
+        final coords = polyList
+            .map(
+              (p) => mapbox.Position(
+                (p['lng'] as num).toDouble(),
+                (p['lat'] as num).toDouble(),
+              ),
+            )
+            .toList();
+
         if (mounted) {
-          // Ra lệnh cho Provider vẽ đường
           context.read<MapStateProvider>().drawRoutePolyline(coords);
-          
-          // Vẽ Điểm đến
           final endName = routeData['endName']?.toString() ?? 'Đích đến';
           if (coords.isNotEmpty) {
-            context.read<MapStateProvider>().drawDestinationMarker(coords.last, endName);
+            context.read<MapStateProvider>().drawDestinationMarker(
+              coords.last,
+              endName,
+            );
           }
         }
       }
     });
 
-    // B. Lắng nghe GPS thời gian thực của nhóm
-    _memberLocationsSub = _roomRepo.listenToRoomLocations(widget.roomId).listen((data) {
-      final newLocations = <String, mapbox.Position>{};
-      data.forEach((uid, info) {
-        if (info is Map && info['lat'] != null && info['lng'] != null) {
-          // KHÔNG vẽ chính mình lên bản đồ, vì Mapbox đã có chấm xanh rùi
-          if (uid != widget.currentUser.id) {
-             newLocations[uid] = mapbox.Position(
-               (info['lng'] as num).toDouble(),
-               (info['lat'] as num).toDouble(),
-             );
+    // 2. Lắng nghe Vị trí thành viên để vẽ lên bản đồ
+    _memberLocationsSub = _roomRepo.listenToRoomLocations(widget.roomId).listen(
+      (data) {
+        final newLocations = <String, mapbox.Position>{};
+        data.forEach((uid, info) {
+          if (info is Map && info['lat'] != null && info['lng'] != null) {
+            if (uid != widget.currentUser.id) {
+              newLocations[uid] = mapbox.Position(
+                (info['lng'] as num).toDouble(),
+                (info['lat'] as num).toDouble(),
+              );
+            }
           }
-        }
-      });
-      _memberLocations = newLocations;
-      _updateMapMembers();
-      _checkFormationDistance();
-    });
+        });
+        _memberLocations = newLocations;
 
-    // C. Lắng nghe Cảnh báo (Ổ gà, CSGT...)
-    _warningsSub = _warningRepo.listenToRoomWarnings(widget.roomId).listen((warnings) {
+        _updateMapMembers(); // Cập nhật vẽ marker
+        _checkFormationDistance();
+      },
+    );
+
+    // 3. Lắng nghe cảnh báo rủi ro
+    _warningsSub = _warningRepo.listenToRoomWarnings(widget.roomId).listen((
+      warnings,
+    ) {
       _riskLabels = warnings;
       _updateMapRisks();
     });
   }
 
-  /// Gọi Provider để vẽ Members
   void _updateMapMembers() {
     if (!mounted) return;
-    
+
     final displayNames = <String, String>{};
     final roles = <String, String>{};
-    
+
     _memberInfo.forEach((uid, info) {
       if (info is Map) {
         displayNames[uid] = info['displayName']?.toString() ?? 'User';
@@ -151,16 +162,22 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
       }
     });
 
-    context.read<MapStateProvider>().drawMemberMarkers(_memberLocations, displayNames, roles);
+    // GỌI SANG M2 ĐỂ VẼ VỊ TRÍ
+    context.read<MapStateProvider>().drawMemberMarkers(
+      _memberLocations,
+      displayNames,
+      roles,
+    );
   }
 
-  /// Gọi Provider để vẽ Risks
   void _updateMapRisks() {
     if (!mounted) return;
-    context.read<MapStateProvider>().drawRiskMarkers(_riskLabels, _memberLocations);
+    context.read<MapStateProvider>().drawRiskMarkers(
+      _riskLabels,
+      _memberLocations,
+    );
   }
 
-  /// Thuật toán kiểm tra "Đứt đội hình" (Xa nhau quá 2km)
   void _checkFormationDistance() {
     if (_myLastPos == null || _memberLocations.isEmpty) return;
 
@@ -172,7 +189,7 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
         endLat: pos.lat.toDouble(),
         endLng: pos.lng.toDouble(),
       );
-      if (dist > 2000.0) { // Lớn hơn 2000 mét (2km)
+      if (dist > 2000.0) {
         tooFar = true;
         break;
       }
@@ -183,8 +200,10 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
     }
   }
 
-  /// Xử lý khi user chọn một điểm đến trên thanh tìm kiếm (Chỉ Leader)
-  void _handleDestinationSelected(mapbox.Position destPos, String placeName) async {
+  void _handleDestinationSelected(
+    mapbox.Position destPos,
+    String placeName,
+  ) async {
     if (widget.currentUser.role != UserRole.leader) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Chỉ Leader mới có quyền tạo lộ trình!')),
@@ -199,27 +218,88 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
       return;
     }
 
-    // 1. Dùng RouteUtils gọi Mapbox API tìm đường
     final coords = await RouteUtils.getMapboxRoute(_myLastPos!, destPos);
     if (coords.isEmpty) return;
 
-    // 2. Format dữ liệu để ném lên Cloud Function
-    final polylineData = coords.map((c) => {'lng': c.lng.toDouble(), 'lat': c.lat.toDouble()}).toList();
+    final polylineData = coords
+        .map((c) => {'lng': c.lng.toDouble(), 'lat': c.lat.toDouble()})
+        .toList();
 
-    // 3. Gọi Backend để chia sẻ cho cả nhóm
-    await _roomRepo.setRoomRoute(
+    final totalKm = await _roomRepo.setRoomRoute(
       roomId: widget.roomId,
       polyline: polylineData,
       startName: 'Vị trí hiện tại',
       endName: placeName,
     );
+
+    if (totalKm == null) return;
+
+    // === THÊM WEATHER BUBBLES dọc route ===
+    await _loadWeatherAlongRoute(coords);
   }
 
-  /// Xử lý khi user đọc Voice AI (Ví dụ: "Phía trước có ổ gà")
+  /// Trích waypoints mỗi 50km và lấy weather cho từng waypoint
+  Future<void> _loadWeatherAlongRoute(List<mapbox.Position> coords) async {
+    if (coords.length < 2 || !mounted) return;
+
+    final waypoints = _extractWaypointsEvery50Km(coords);
+    final weatherWarnings = <WarningMarker>[];
+
+    for (final pt in waypoints) {
+      final warning = await WeatherApi.checkWeatherRisk(
+        pt.lat.toDouble(),
+        pt.lng.toDouble(),
+      );
+      if (warning != null) weatherWarnings.add(warning);
+    }
+
+    if (weatherWarnings.isNotEmpty && mounted) {
+      final mapProvider = context.read<MapStateProvider>();
+      await mapProvider.drawWeatherMarkers(weatherWarnings);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Đã thêm ${weatherWarnings.length} điểm thời tiết'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  /// Chia polyline thành các waypoint cách nhau ~50km
+  List<mapbox.Position> _extractWaypointsEvery50Km(
+    List<mapbox.Position> coords,
+  ) {
+    if (coords.isEmpty) return [];
+    final waypoints = <mapbox.Position>[coords.first];
+    double accumulatedKm = 0.0;
+
+    for (int i = 1; i < coords.length; i++) {
+      final p1 = coords[i - 1];
+      final p2 = coords[i];
+      final segmentKm = _haversineKm(
+        p1.lat.toDouble(), p1.lng.toDouble(),
+        p2.lat.toDouble(), p2.lng.toDouble(),
+      );
+      accumulatedKm += segmentKm;
+      if (accumulatedKm >= 50.0) {
+        waypoints.add(p2);
+        accumulatedKm = 0.0;
+      }
+    }
+    return waypoints;
+  }
+
+  /// Haversine distance (km)
+  double _haversineKm(double lat1, double lon1, double lat2, double lon2) {
+    const p = 0.017453292519943295;
+    final a = 0.5 - cos((lat2 - lat1) * p) / 2 +
+        cos(lat1 * p) * cos(lat2 * p) * (1 - cos((lon2 - lon1) * p)) / 2;
+    return 12742 * asin(sqrt(a));
+  }
+
   void _handleVoiceResult(String text) async {
     if (_myLastPos == null) return;
-    
-    // Đẩy text cho Backend gọi Gemini
+
     final result = await _warningRepo.parseRiskFromVoice(
       roomId: widget.roomId,
       voiceText: text,
@@ -229,14 +309,24 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
 
     if (result != null && mounted) {
       final category = result['category'];
-      final conf = result['confidence'] as double;
+      final conf = (result['confidence'] as num?)?.toDouble() ?? 0.0;
       if (conf > 0.5) {
         ScaffoldMessenger.of(context).showSnackBar(
-           SnackBar(content: Text('AI đã thêm cảnh báo: $category', style: const TextStyle(color: Colors.green))),
+          SnackBar(
+            content: Text(
+              'AI đã thêm cảnh báo: $category',
+              style: const TextStyle(color: Colors.green),
+            ),
+          ),
         );
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-           const SnackBar(content: Text('AI không chắc chắn đó là rủi ro gì.', style: TextStyle(color: Colors.orange))),
+          const SnackBar(
+            content: Text(
+              'AI không chắc chắn đó là rủi ro gì.',
+              style: TextStyle(color: Colors.orange),
+            ),
+          ),
         );
       }
     }
@@ -253,15 +343,13 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Stack(
+    // ĐÃ XÓA TẤM KÍNH SCAFFOLD
+    return SafeArea(
+      child: Stack(
         children: [
-          // LỚP ĐÁY: BẢN ĐỒ CHÍNH (Ngu ngơ, chỉ biết hiển thị)
-          const MainMapScreen(),
-
-          // LỚP TRÊN: THANH TÌM KIẾM
+          // Thanh tìm kiếm
           Positioned(
-            top: 50,
+            top: 16, // Chỉnh lại top cho vừa vặn vì đã có SafeArea
             left: 16,
             right: 16,
             child: RoutingSearchBar(
@@ -272,10 +360,167 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
             ),
           ),
 
-          // CẢNH BÁO ĐỨT ĐỘI HÌNH
+          // BẢNG THÔNG TIN PHÒNG (HUD PANEL) - ĐÃ LÀM GỌN & THÊM HIỆU ỨNG MỞ RỘNG
+          Positioned(
+            top: 90,
+            left: 16,
+            child: GestureDetector(
+              onTap: () {
+                setState(() {
+                  _isInfoExpanded = !_isInfoExpanded; // Đảo trạng thái thu/mở
+                });
+              },
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 300),
+                curve: Curves.easeInOut,
+                width: _isInfoExpanded ? 240 : 150, // Chiều rộng linh hoạt
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.95),
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.15),
+                      blurRadius: 8,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // PHẦN HEADER LÚC NÀO CŨNG HIỆN (Bản thu gọn)
+                    Row(
+                      children: [
+                        const Icon(Icons.tag, color: Colors.blue, size: 18),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            'Phòng: ${widget.roomId}',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        Icon(
+                          _isInfoExpanded
+                              ? Icons.keyboard_arrow_up
+                              : Icons.keyboard_arrow_down,
+                          color: Colors.grey,
+                        ),
+                      ],
+                    ),
+
+                    // PHẦN CHI TIẾT (Chỉ hiện khi _isInfoExpanded == true)
+                    if (_isInfoExpanded) ...[
+                      const Divider(height: 16),
+                      // 1. Trạng thái đội hình
+                      Row(
+                        children: [
+                          Icon(
+                            _isTooFar ? Icons.gpp_bad : Icons.verified_user,
+                            color: _isTooFar ? Colors.red : Colors.green,
+                            size: 16,
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              'Đội hình: ${_isTooFar ? "Đứt đoàn" : "Ổn định"}',
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                                color: _isTooFar ? Colors.red : Colors.green,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+
+                      // 2. Danh sách thành viên chi tiết
+                      Text(
+                        'Thành viên (${_memberInfo.length}):',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.black87,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      // Giới hạn chiều cao danh sách để không che hết bản đồ nếu nhóm quá đông
+                      Container(
+                        constraints: const BoxConstraints(maxHeight: 150),
+                        child: SingleChildScrollView(
+                          child: Column(
+                            children: _memberInfo.entries.map((entry) {
+                              final info = entry.value as Map;
+                              final name =
+                                  info['displayName']?.toString() ?? 'Ẩn danh';
+                              final role = info['role']?.toString() ?? 'member';
+
+                              // Đổi màu theo vai trò cho sinh động
+                              Color roleColor = Colors.orange; // Member
+                              if (role == 'leader') roleColor = Colors.blue;
+                              if (role == 'sweeper') roleColor = Colors.green;
+
+                              return Padding(
+                                padding: const EdgeInsets.only(bottom: 6.0),
+                                child: Row(
+                                  children: [
+                                    Icon(
+                                      Icons.two_wheeler,
+                                      size: 14,
+                                      color: roleColor,
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Expanded(
+                                      child: Text(
+                                        name,
+                                        style: const TextStyle(fontSize: 13),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 4,
+                                        vertical: 2,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: roleColor.withOpacity(0.1),
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                      child: Text(
+                                        role.toUpperCase(),
+                                        style: TextStyle(
+                                          fontSize: 9,
+                                          fontWeight: FontWeight.bold,
+                                          color: roleColor,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
+
+          // Cảnh báo đứt đoàn
           if (_isTooFar)
             Positioned(
-              top: 130,
+              top: 200,
               left: 16,
               right: 16,
               child: Container(
@@ -286,12 +531,19 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
                 ),
                 child: const Row(
                   children: [
-                    Icon(Icons.warning_amber_rounded, color: Colors.white, size: 30),
+                    Icon(
+                      Icons.warning_amber_rounded,
+                      color: Colors.white,
+                      size: 30,
+                    ),
                     SizedBox(width: 10),
                     Expanded(
                       child: Text(
                         'CẢNH BÁO ĐỨT ĐỘI HÌNH!\nBạn đang cách xa các thành viên khác hơn 2km.',
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                     ),
                   ],
@@ -299,23 +551,19 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
               ),
             ),
 
-          // LỚP NỔI: NÚT THU ÂM BÁO RỦI RO
           Positioned(
             bottom: 30,
             right: 20,
-            child: VoiceFab(
-              onVoiceResult: _handleVoiceResult,
-            ),
+            child: VoiceFab(onVoiceResult: _handleVoiceResult),
           ),
 
-          // LỚP NỔI: NÚT QUAY LẠI
           Positioned(
             bottom: 30,
             left: 20,
             child: FloatingActionButton(
               heroTag: 'back_fab',
               backgroundColor: Colors.white,
-              onPressed: () => Navigator.of(context).pop(),
+              onPressed: widget.onLeaveRoom,
               child: const Icon(Icons.arrow_back, color: Colors.black),
             ),
           ),

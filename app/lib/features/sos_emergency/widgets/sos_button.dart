@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 class SosButton extends StatelessWidget {
   final VoidCallback onSosTriggered;
 
-  const SosButton({Key? key, required this.onSosTriggered}) : super(key: key);
+  const SosButton({super.key, required this.onSosTriggered});
 
   @override
   Widget build(BuildContext context) {
