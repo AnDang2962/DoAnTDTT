@@ -8,6 +8,7 @@ import '../../../../core/utils/geo_utils.dart';
 import '../../../../data/repositories/group_repository.dart';
 import '../../../../core/services/location_service.dart';
 
+
 /// Model để chứa thông tin của một thành viên (vị trí + vai trò)
 class MemberInfo {
   final String id;
@@ -77,23 +78,15 @@ class MembersProvider extends ChangeNotifier {
   String? _currentUserId;
   String? _currentRole;
 
-  // ===================================================================
-  // 👇 BẮT ĐẦU PHẦN THÊM VÀO ĐỂ KHỚP VỚI NÚT SOS CỦA BẠN 👇
-  // ===================================================================
-  
-  /// Getter: Cho phép file sos_fab.dart "rút" ID động hiện tại của phòng
-  /// Nếu chưa vào phòng (null), sẽ trả về chuỗi rỗng để không bị lỗi app
-  String get roomId => _currentRoomId ?? '';
-
-  /// Setter: Cho phép cập nhật nhanh ID phòng (Nếu có luồng logic cần đổi phòng)
-  void setRoomId(String newRoomId) {
-    _currentRoomId = newRoomId;
-    notifyListeners();
+  // 🔥 NOTE CHO M3 (TỪ M4 - TÍNH NĂNG SOS):
+  // 2 hàm dưới đây chỉ làm nhiệm vụ mở cửa cho Tab SOS đọc được mã phòng.
+  // Tuyệt đối KHÔNG làm ảnh hưởng đến luồng Logic Radar hiện tại của M3. 
+  // M3 vui lòng giữ nguyên để nút báo động hoạt động nhé!
+  String? get roomId => _currentRoomId;
+  void updateRoomIdForSOS(String id) {
+    _currentRoomId = id;
   }
-
-  // ===================================================================
-  // 👆 KẾT THÚC PHẦN THÊM VÀO 👆
-  // ===================================================================
+  // 🔥 ============================================================ 🔥
 
   // Subscription
   StreamSubscription<Position>? _positionSubscription;
@@ -139,7 +132,7 @@ class MembersProvider extends ChangeNotifier {
           );
 
       // Bước 3: Bắt đầu theo dõi vị trí thiết bị và đẩy lên Firebase
-      locationService.startTracking(distanceFilter: 2); // Cập nhật mỗi 2m
+      locationService.startTracking(distanceFilter: 15); // Cập nhật mỗi 15m
       _positionSubscription = locationService.positionStream.listen((position) {
         _uploadCurrentPosition(lat: position.latitude, lng: position.longitude);
       });
@@ -203,33 +196,45 @@ class MembersProvider extends ChangeNotifier {
       }
     }
 
-    // Bước 2: Nếu không đủ Leader và Sweeper, reset tất cả dữ liệu
-    if (leader == null || sweeper == null) {
+    // 🔥 FIX 3: FALLBACK LOGIC
+    // Nếu mất Leader thì chịu chết, reset Radar
+    if (leader == null) {
       alert = RadarAlert.empty();
       safeCircle = null;
       leaderSweeperDistance = '';
       return;
     }
 
-    // Bước 3: Tính khoảng cách giữa Leader và Sweeper
-    final distanceLeaderSweeper = calculateDistanceMeters(
-      startLat: leader.location.latitude,
-      startLng: leader.location.longitude,
-      endLat: sweeper.location.latitude,
-      endLng: sweeper.location.longitude,
-    );
+    LatLng circleCenter;
+    double radiusMeters;
+    bool isLeaderSweeperFar = false;
 
-    leaderSweeperDistance = '${distanceLeaderSweeper.toStringAsFixed(1)} m';
+    if (sweeper == null) {
+      // Trường hợp mất Sweeper: Lấy Leader làm tâm, cấp bán kính an toàn 500m
+      circleCenter = leader.location;
+      radiusMeters = 500.0;
+      leaderSweeperDistance = 'Mất kết nối Chốt đoàn';
+      isLeaderSweeperFar = true; // Bật cảnh báo đỏ vì mất chốt đoàn
+    } else {
+      // Trường hợp bình thường: Có đủ Leader và Sweeper
+      final distanceLeaderSweeper = calculateDistanceMeters(
+        startLat: leader.location.latitude,
+        startLng: leader.location.longitude,
+        endLat: sweeper.location.latitude,
+        endLng: sweeper.location.longitude,
+      );
 
-    // Bước 4: Xác định tâm vòng tròn (điểm giữa Leader và Sweeper)
-    final centerLat =
-        (leader.location.latitude + sweeper.location.latitude) / 2;
-    final centerLng =
-        (leader.location.longitude + sweeper.location.longitude) / 2;
-    final circleCenter = LatLng(centerLat, centerLng);
+      leaderSweeperDistance = '${distanceLeaderSweeper.toStringAsFixed(1)} m';
+      isLeaderSweeperFar = distanceLeaderSweeper >= DISCONNECTION_THRESHOLD;
 
-    // Bước 5: Xác định bán kính vòng tròn (nửa khoảng cách Leader-Sweeper)
-    final radiusMeters = distanceLeaderSweeper / 2;
+      final centerLat =
+          (leader.location.latitude + sweeper.location.latitude) / 2;
+      final centerLng =
+          (leader.location.longitude + sweeper.location.longitude) / 2;
+
+      circleCenter = LatLng(centerLat, centerLng);
+      radiusMeters = distanceLeaderSweeper / 2;
+    }
 
     safeCircle = SafeCircle(center: circleCenter, radiusMeters: radiusMeters);
 
@@ -244,7 +249,6 @@ class MembersProvider extends ChangeNotifier {
         continue;
       }
 
-      // Tính khoảng cách từ vị trí member đến tâm vòng tròn
       final distanceToCenter = calculateDistanceMeters(
         startLat: member.location.latitude,
         startLng: member.location.longitude,
@@ -252,15 +256,12 @@ class MembersProvider extends ChangeNotifier {
         endLng: circleCenter.longitude,
       );
 
-      // Nếu khoảng cách > bán kính, member này đã lạc
       if (distanceToCenter > radiusMeters) {
         lostMembersList.add(memberId);
       }
     }
 
-    // Bước 7: Phát hiện cảnh báo
-    final isLeaderSweeperFar = distanceLeaderSweeper >= DISCONNECTION_THRESHOLD;
-
+    // Bước 7: Cập nhật cảnh báo
     alert = RadarAlert(
       isLeaderSweeperFar: isLeaderSweeperFar,
       lostMembers: lostMembersList,

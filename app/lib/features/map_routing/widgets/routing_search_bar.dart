@@ -1,18 +1,24 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mapbox;
-import '../../../core/constants/env_keys.dart';
-/// Component Thanh Tìm kiếm Địa điểm (Sử dụng Mapbox Geocoding API)
-/// Cho phép người dùng gõ tìm tên địa điểm và hiển thị danh sách gợi ý.
+import '../services/geocoding_api.dart';
+import 'voice_record_btn.dart';
+
+/// Thanh Tìm kiếm Địa điểm.
+///
+/// **Architecture:** Gọi backend `geocodePlace` thay vì Mapbox Geocoding trực tiếp.
+/// - Type-ahead: autocomplete=true, limit=5
+/// - Voice: backend trả 1 kết quả chính xác → callback onDestinationSelected
 class RoutingSearchBar extends StatefulWidget {
-  final Function(mapbox.Position position, String placeName) onDestinationSelected;
+  final Function(mapbox.Position position, String placeName)
+      onDestinationSelected;
   final VoidCallback onClear;
+  final Function(String spokenText)? onVoiceCommand;
 
   const RoutingSearchBar({
     Key? key,
     required this.onDestinationSelected,
     required this.onClear,
+    this.onVoiceCommand,
   }) : super(key: key);
 
   @override
@@ -21,7 +27,8 @@ class RoutingSearchBar extends StatefulWidget {
 
 class _RoutingSearchBarState extends State<RoutingSearchBar> {
   final TextEditingController _searchController = TextEditingController();
-  List<dynamic> _suggestions = [];
+  List<GeocodedPlace> _suggestions = [];
+  bool _isLoading = false;
 
   @override
   void dispose() {
@@ -29,30 +36,59 @@ class _RoutingSearchBarState extends State<RoutingSearchBar> {
     super.dispose();
   }
 
-  /// Gọi API Mapbox để lấy gợi ý địa điểm
+  /// Type-ahead — gọi backend geocodePlace với autocomplete=true.
   Future<void> _fetchSuggestions(String query) async {
     if (query.isEmpty) {
-      setState(() => _suggestions = []);
+      setState(() {
+        _suggestions = [];
+        _isLoading = false;
+      });
       return;
     }
-    
-    final token = EnvKeys.mapboxPublicKey;
-    // Giới hạn tìm kiếm ở Việt Nam (country=vn), hỗ trợ tiếng Việt (language=vi)
-    final url =
-        'https://api.mapbox.com/geocoding/v5/mapbox.places/${Uri.encodeComponent(query)}.json'
-        '?access_token=$token&country=vn&autocomplete=true&language=vi&limit=5';
 
-    try {
-      final response = await http.get(Uri.parse(url));
-      if (response.statusCode == 200) {
-        if (mounted) {
-          setState(() {
-            _suggestions = json.decode(response.body)['features'];
-          });
-        }
-      }
-    } catch (e) {
-      debugPrint('[RoutingSearchBar] Lỗi Geocoding: $e');
+    setState(() => _isLoading = true);
+
+    final places = await GeocodingApi.searchAutocomplete(query);
+
+    if (!mounted) return;
+    setState(() {
+      _suggestions = places;
+      _isLoading = false;
+    });
+  }
+
+  /// Khi user nói voice → tìm exact + auto-select kết quả đầu.
+  Future<void> _handleVoiceText(String spokenText) async {
+    // Hiển thị text vào search box
+    setState(() {
+      _searchController.text = spokenText;
+      _suggestions = [];
+      _isLoading = true;
+    });
+
+    // Gọi backend geocode với exact match
+    final place = await GeocodingApi.findExact(spokenText);
+
+    if (!mounted) return;
+    setState(() => _isLoading = false);
+
+    if (place == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Không tìm thấy địa điểm "$spokenText"')),
+      );
+      return;
+    }
+
+    // Auto-select kết quả → callback vẽ route
+    FocusScope.of(context).unfocus();
+    widget.onDestinationSelected(
+      mapbox.Position(place.lng, place.lat),
+      place.name,
+    );
+
+    // Bắn signal cho RoutingPanel nếu cần
+    if (widget.onVoiceCommand != null) {
+      widget.onVoiceCommand!(spokenText);
     }
   }
 
@@ -62,16 +98,31 @@ class _RoutingSearchBarState extends State<RoutingSearchBar> {
       children: [
         Card(
           elevation: 4,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(25)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(25),
+          ),
           child: TextField(
             controller: _searchController,
             decoration: InputDecoration(
-              hintText: 'Tìm điểm đến...',
-              prefixIcon: const Icon(Icons.search, color: Colors.deepOrange),
+              hintText: 'Tìm điểm đến hoặc đọc lệnh...',
+              prefixIcon: _isLoading
+                  ? const Padding(
+                      padding: EdgeInsets.all(14),
+                      child: SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    )
+                  : const Icon(Icons.search, color: Colors.deepOrange),
               border: InputBorder.none,
               contentPadding: const EdgeInsets.symmetric(vertical: 12),
-              suffixIcon: _searchController.text.isNotEmpty
-                  ? IconButton(
+              suffixIcon: Row(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  if (_searchController.text.isNotEmpty)
+                    IconButton(
                       icon: const Icon(Icons.clear),
                       onPressed: () {
                         setState(() {
@@ -80,12 +131,21 @@ class _RoutingSearchBarState extends State<RoutingSearchBar> {
                         });
                         widget.onClear();
                       },
-                    )
-                  : null,
+                    ),
+                  Padding(
+                    padding: const EdgeInsets.only(right: 6.0),
+                    child: VoiceRecordButton(
+                      onResult: _handleVoiceText,
+                    ),
+                  ),
+                ],
+              ),
             ),
             onChanged: _fetchSuggestions,
           ),
         ),
+
+        // Danh sách gợi ý từ backend
         if (_suggestions.isNotEmpty)
           Card(
             elevation: 4,
@@ -94,21 +154,26 @@ class _RoutingSearchBarState extends State<RoutingSearchBar> {
               shrinkWrap: true,
               itemCount: _suggestions.length,
               itemBuilder: (ctx, idx) {
-                final item = _suggestions[idx];
+                final place = _suggestions[idx];
                 return ListTile(
-                  leading: const Icon(Icons.location_pin, color: Colors.deepOrange),
-                  title: Text(item['text']),
-                  subtitle: Text(item['place_name'], maxLines: 1, overflow: TextOverflow.ellipsis),
+                  leading:
+                      const Icon(Icons.location_pin, color: Colors.deepOrange),
+                  title: Text(place.name),
+                  subtitle: Text(
+                    place.fullName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                   onTap: () {
-                    FocusScope.of(context).unfocus(); // Tắt bàn phím
+                    FocusScope.of(context).unfocus();
                     setState(() {
-                      _searchController.text = item['text'];
-                      _suggestions = []; // Ẩn danh sách gợi ý
+                      _searchController.text = place.name;
+                      _suggestions = [];
                     });
-                    // Bắn tọa độ ngược ra ngoài cho Map vẽ
-                    final lng = item['center'][0].toDouble();
-                    final lat = item['center'][1].toDouble();
-                    widget.onDestinationSelected(mapbox.Position(lng, lat), item['text']);
+                    widget.onDestinationSelected(
+                      mapbox.Position(place.lng, place.lat),
+                      place.name,
+                    );
                   },
                 );
               },

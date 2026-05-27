@@ -5,70 +5,102 @@ import 'package:flutter/foundation.dart';
 import '../models/user_model.dart';
 import 'package:route_mate_app/services/firebase_functions_helper.dart';
 
-/// Quản lý dữ liệu Phòng Phượt (Room), Lộ trình (Route) và Vị trí GPS (Location)
+/// Quản lý dữ liệu Phòng Phượt (Room) — KIẾN TRÚC BACKEND-DRIVEN
+///
+/// Tất cả thao tác thay đổi DB (create/join/setRoute/leave) đều qua
+/// Cloud Functions backend, không bypass Firestore từ client.
+///
+/// Lý do:
+/// - Tránh race condition (2 leader cùng tạo phòng mã trùng nhau)
+/// - Bảo mật: backend assertLeader, validate input, encode rules
+/// - Sẵn sàng deploy production sau này (không cần refactor)
+///
+/// Pattern direct (RTDB GPS + Firestore listener) vẫn giữ vì:
+/// - GPS streaming cần latency thấp, không qua Cloud Functions
+/// - Listener Firestore là cách chuẩn để sync data đến client
 class RoomRepository {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseDatabase _rtdb = FirebaseDatabase.instance;
 
-  // Trỏ thẳng đến khu vực chứa Cloud Function (asia-southeast1 để giảm độ trễ)
+  // ============================================================
+  // === BACKEND CALLS (gọi Cloud Functions) ===
+  // ============================================================
 
-  final FirebaseFunctions _functions = FirebaseFunctions.instanceFor(
-    region: 'asia-southeast1',
-  );
-
-  /// TẠO PHÒNG MỚI (Sử dụng Backend Cloud Function)
-  /// Backend sẽ tự động sinh ID ngắn (6 ký tự) và khởi tạo cấu trúc dữ liệu chuẩn.
-  /// TẠO PHÒNG MỚI (Đã hack bỏ qua Backend để test UI)
+  /// TẠO PHÒNG MỚI — gọi Cloud Function `createRoom`
+  ///
+  /// Backend thực hiện:
+  ///   1. Sinh mã 6 ký tự ngẫu nhiên (loại trừ O, I, 0, 1 — dễ nhầm)
+  ///   2. Loop với transaction tránh race condition mã trùng
+  ///   3. Tạo doc rooms/{roomId} với leaderId = auth.uid
+  ///   4. Set node roomMembers/{roomId}/{uid} trên RTDB
+  ///
+  /// Returns: roomId 6 ký tự nếu thành công, null nếu fail.
   Future<String?> createRoom(UserModel creator) async {
     try {
-      final result = await backendFunctions.httpsCallable('createRoom').call({
+      final result = await backendFunctions
+          .httpsCallable('createRoom')
+          .call<Map<String, dynamic>>({
         'displayName': creator.name,
-        'fcmToken':
-            'fake-token-test', // Bạn có thể để tạm fake token nếu chưa làm FCM
+        'fcmToken': 'demo_fake_fcm_${DateTime.now().millisecondsSinceEpoch}',
       });
 
-      final roomId = result.data['roomId'] as String;
-      debugPrint('[RoomRepository] Đã tạo phòng: $roomId');
+      final data = Map<String, dynamic>.from(result.data);
+      final roomId = data['roomId']?.toString();
+
+      debugPrint('[RoomRepository] ✓ Đã tạo phòng qua backend: $roomId');
       return roomId;
     } on FirebaseFunctionsException catch (e) {
       debugPrint(
-        '[RoomRepository] Lỗi Backend khi tạo phòng: ${e.code} - ${e.message}',
-      );
+          '[RoomRepository] ✗ Backend createRoom error: ${e.code} - ${e.message}');
       return null;
     } catch (e) {
-      debugPrint('[RoomRepository] Lỗi mạng/Hệ thống khi tạo phòng: $e');
+      debugPrint('[RoomRepository] ✗ Lỗi mạng khi tạo phòng: $e');
       return null;
     }
   }
 
-  /// VÀO PHÒNG (Cập nhật trực tiếp lên Firestore)
+  /// VÀO PHÒNG — gọi Cloud Function `joinRoom`
+  ///
+  /// Backend thực hiện:
+  ///   1. Verify mã phòng tồn tại (throw not-found nếu invalid)
+  ///   2. Check phòng active
+  ///   3. Add auth.uid vào members + memberInfo
+  ///   4. Set roomMembers/{roomId}/{uid} trên RTDB
   Future<bool> joinRoom(String roomId, UserModel user) async {
     try {
-      final docRef = _firestore.collection('rooms').doc(roomId);
-      final docSnap = await docRef.get();
-
-      if (!docSnap.exists) {
-        debugPrint('Phòng không tồn tại!');
-        return false;
-      }
-
-      // Theo chuẩn Demo, Backend dùng cấu trúc Map 'memberInfo' thay vì List
-      await docRef.update({
-        'memberInfo.${user.id}': {
-          'displayName': user.name,
-          'role': user.role == UserRole.leader ? 'leader' : 'member',
-          'fcmToken': 'fake-fcm-token-pa4-demo-1234567890',
-        },
+      await backendFunctions
+          .httpsCallable('joinRoom')
+          .call<Map<String, dynamic>>({
+        'roomId': roomId.toUpperCase(), // backend lưu UPPERCASE
+        'displayName': user.name,
+        'fcmToken': 'demo_fake_fcm_${DateTime.now().millisecondsSinceEpoch}',
       });
+
+      debugPrint('[RoomRepository] ✓ Đã vào phòng: $roomId');
       return true;
+    } on FirebaseFunctionsException catch (e) {
+      debugPrint(
+          '[RoomRepository] ✗ Backend joinRoom error: ${e.code} - ${e.message}');
+
+      if (e.code == 'not-found') {
+        debugPrint('  → Mã phòng không tồn tại');
+      } else if (e.code == 'failed-precondition') {
+        debugPrint('  → ${e.message}');
+      }
+      return false;
     } catch (e) {
-      debugPrint('Lỗi khi vào phòng: $e');
+      debugPrint('[RoomRepository] ✗ Lỗi mạng khi vào phòng: $e');
       return false;
     }
   }
 
-  /// CHIA SẺ LỘ TRÌNH CHO CẢ NHÓM (Sử dụng Backend Cloud Function)
-  /// Chỉ Leader mới được gọi hàm này. Backend sẽ lưu lộ trình và tự thông báo cho các máy khác.
+  /// CHIA SẺ LỘ TRÌNH — gọi Cloud Function `setRoomRoute`
+  ///
+  /// Backend thực hiện:
+  ///   1. assertLeader (chỉ Leader mới được set route)
+  ///   2. Tính totalDistanceKm với Haversine formula
+  ///   3. Update rooms/{roomId}.route trên Firestore
+  ///   4. Members tự nhận update qua Firestore listener
   Future<double?> setRoomRoute({
     required String roomId,
     required List<Map<String, double>> polyline,
@@ -76,30 +108,67 @@ class RoomRepository {
     required String endName,
   }) async {
     try {
-      final result = await _functions
+      final result = await backendFunctions
           .httpsCallable('setRoomRoute')
           .call<Map<String, dynamic>>({
-            'roomId': roomId,
-            'route': {
-              'polyline': polyline,
-              'startName': startName,
-              'endName': endName,
-            },
-          });
+        'roomId': roomId,
+        'route': {
+          'polyline': polyline,
+          'startName': startName,
+          'endName': endName,
+        },
+      });
 
-      final totalKm = (result.data['totalDistanceKm'] as num).toDouble();
-      debugPrint('[RoomRepository] Đã set lộ trình -> Dài $totalKm km');
+      final data = Map<String, dynamic>.from(result.data);
+      final totalKm = (data['totalDistanceKm'] as num?)?.toDouble() ?? 0.0;
+
+      debugPrint(
+          '[RoomRepository] ✓ Đã chia sẻ lộ trình: ${totalKm.toStringAsFixed(1)} km');
       return totalKm;
     } on FirebaseFunctionsException catch (e) {
       debugPrint(
-        '[RoomRepository] Lỗi Backend khi set lộ trình: ${e.code} - ${e.message}',
-      );
+          '[RoomRepository] ✗ Backend setRoomRoute error: ${e.code} - ${e.message}');
+      return null;
+    } catch (e) {
+      debugPrint('[RoomRepository] ✗ Lỗi khi set lộ trình: $e');
       return null;
     }
   }
 
-  /// BẮN TỌA ĐỘ LÊN MÁY CHỦ (Realtime Database)
-  /// Dùng Realtime Database thay vì Firestore để tiết kiệm tiền và đạt tốc độ siêu nhanh (Ping < 50ms)
+  /// RỜI PHÒNG — gọi Cloud Function `leaveRoom`
+  ///
+  /// Note: Leader KHÔNG được rời (backend throw failed-precondition).
+  /// Trong UI nên ẩn nút "Rời phòng" với Leader.
+  Future<bool> leaveRoom(String roomId) async {
+    try {
+      await backendFunctions
+          .httpsCallable('leaveRoom')
+          .call<Map<String, dynamic>>({
+        'roomId': roomId,
+      });
+
+      debugPrint('[RoomRepository] ✓ Đã rời phòng');
+      return true;
+    } on FirebaseFunctionsException catch (e) {
+      debugPrint(
+          '[RoomRepository] ✗ Backend leaveRoom error: ${e.code} - ${e.message}');
+      return false;
+    } catch (e) {
+      debugPrint('[RoomRepository] ✗ Lỗi khi rời phòng: $e');
+      return false;
+    }
+  }
+
+  // ============================================================
+  // === DIRECT FIREBASE CALLS (đúng pattern, không cần backend) ===
+  // ============================================================
+
+  /// BẮN TỌA ĐỘ LÊN RTDB
+  ///
+  /// GPS streaming dùng RTDB direct (không qua Cloud Functions):
+  /// - Latency thấp (<1s)
+  /// - Backend rules check membership từ roomMembers/{roomId}/{uid}
+  /// - onDisconnect tự xóa khi rớt mạng
   Future<void> updateUserLocation(
     String roomId,
     String userId,
@@ -108,18 +177,21 @@ class RoomRepository {
   ) async {
     try {
       final ref = _rtdb.ref('gps/$roomId/$userId');
+
+      // Auto cleanup khi rớt mạng (chống "Ghost bubble")
+      await ref.onDisconnect().remove();
+
       await ref.set({
         'lat': lat,
         'lng': lng,
-        'updatedAt':
-            ServerValue.timestamp, // Đóng dấu thời gian chuẩn của máy chủ
+        'updatedAt': ServerValue.timestamp,
       });
     } catch (e) {
-      debugPrint('Lỗi cập nhật vị trí GPS: $e');
+      debugPrint('[RoomRepository] Lỗi cập nhật GPS: $e');
     }
   }
 
-  /// LẮNG NGHE VỊ TRÍ CỦA TẤT CẢ THÀNH VIÊN (Realtime)
+  /// LẮNG NGHE GPS THỜI GIAN THỰC CỦA TẤT CẢ THÀNH VIÊN
   Stream<Map<String, dynamic>> listenToRoomLocations(String roomId) {
     return _rtdb.ref('gps/$roomId').onValue.map((event) {
       final data = event.snapshot.value;
@@ -128,7 +200,10 @@ class RoomRepository {
     });
   }
 
-  /// LẮNG NGHE SỰ THAY ĐỔI CỦA PHÒNG (VD: Có lộ trình mới, Có thành viên mới)
+  /// LẮNG NGHE PHÒNG THAY ĐỔI (lộ trình mới, member mới join)
+  ///
+  /// Firestore listener — cách chuẩn để frontend sync data từ DB,
+  /// không cần qua Cloud Functions.
   Stream<DocumentSnapshot<Map<String, dynamic>>> listenToRoomData(
     String roomId,
   ) {

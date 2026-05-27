@@ -27,7 +27,6 @@ class SosService {
     };
   }
 
-  // 1. Đã thêm required String roomId để khớp với M3
   Future<void> sendEmergencySignal({
     required String roomId,
     required Function(String, Color) onStatusUpdate
@@ -44,37 +43,41 @@ class SosService {
         
         final HttpsCallable callable = FirebaseFunctions.instanceFor(region: 'asia-southeast1').httpsCallable('sendSOS');
         
-        // 2. Truyền roomId lấy từ Provider vào payload
+        // 🔥 ĐỒNG BỘ 1: Đóng gói payload khớp 100% với yêu cầu của sos.js
         final params = {
           'roomId': roomId, 
           'lat': data['lat'],
           'lng': data['lng'],
-          'message': 'Tôi đang gặp sự cố khẩn cấp!', 
+          // Sinh ra một mã duy nhất dựa trên thời gian (đảm bảo > 8 ký tự) để chống spam
+          'idempotencyKey': 'SOS_${DateTime.now().millisecondsSinceEpoch}', 
         };
         
         final HttpsCallableResult response = await callable.call(params);
-        if (response.data['success'] == true) {
+        
+        // 🔥 ĐỒNG BỘ 2: Bắt đúng biến 'status' mà server trả về (DELIVERED, PARTIAL hoặc CACHED)
+        final String? status = response.data['status'];
+        if (status == 'DELIVERED' || status == 'PARTIAL' || status == 'CACHED') {
           onStatusUpdate("🆘 TÍN HIỆU ĐÃ PHÁT TỚI ĐỘI CỨU HỘ!", Colors.red);
+        } else {
+          onStatusUpdate("Lỗi: Không có thiết bị nào nhận được tín hiệu", Colors.orange);
         }
       }
     } on FirebaseFunctionsException catch (e) {
       onStatusUpdate("Lỗi máy chủ: ${e.message}. Kích hoạt SMS...", Colors.black);
       debugPrint("Mã lỗi: ${e.code}");
       
-      // 3. Fallback: Nếu máy chủ Firebase sập, tự động chuyển sang gửi tin nhắn
       final data = await _collectEmergencyData();
       _sendSmsFallback(data);
     } catch (e) {
-      onStatusUpdate("Lỗi kết nối mạng: $e. Kích hoạt SMS...", Colors.black);
+      onStatusUpdate("Lỗi kết nối mạng. Kích hoạt SMS...", Colors.black);
       
-      // 3. Fallback: Nếu lỗi mạng chập chờn không bắn API được, cũng chuyển sang SMS
       final data = await _collectEmergencyData();
       _sendSmsFallback(data);
     }
   }
 
   void _sendSmsFallback(Map<String, dynamic> data) async {
-    // 4. Sửa lại URL Google Maps để đội cứu hộ click vào là mở bản đồ được ngay
+    // 🔥 ĐỒNG BỘ 3: Fix lỗi hiển thị nội dung và sử dụng Link chuẩn của Google Maps
     final String message = "SOS! Toi can giup. Vi tri: https://maps.google.com/?q=${data['lat']},${data['lng']} - Pin: ${data['battery']}%";
     
     final Uri smsUri = Uri(

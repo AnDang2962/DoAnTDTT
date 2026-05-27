@@ -1,44 +1,83 @@
-import 'dart:convert';
-import 'package:google_generative_ai/google_generative_ai.dart';
-import '../../../core/constants/env_keys.dart';
+import 'package:cloud_functions/cloud_functions.dart';
+import 'package:flutter/foundation.dart';
+import 'package:route_mate_app/core/firebase_functions_helper.dart';
 
+/// Gọi Cloud Function `voiceCommand` của backend M5.
+///
+/// Backend trả về schema (Gemini Function Calling, 6 actions):
+///   { action, params, responseText, latencyMs }
 class GeminiAiApi {
-  /// Phân tích văn bản (được chuyển từ giọng nói) để tìm điểm đến và rủi ro
-  static Future<Map<String, dynamic>?> analyzeCommand(String userInput) async {
-    if (userInput.isEmpty) return null;
-
-    final model = GenerativeModel(
-      model: 'gemini-2.5-flash',
-      apiKey: EnvKeys.geminiApiKey,
-    );
-
-    // Prompt ép Gemini trả về đúng format JSON theo chuẩn WarningMarker
-    final prompt = '''
-      Bạn là AI phân tích hành trình cho app phượt. Người dùng nói: "$userInput".
-      Trả về CHÍNH XÁC định dạng JSON sau, không có text dư thừa:
-      {
-        "destination": "Tên địa điểm đến (nếu có)",
-        "risks": [
-          {
-            "category": "WEATHER", 
-            "vi": "Mưa lớn/Đường trơn (Tóm tắt sự cố)",
-            "lat": 12.2388,
-            "lng": 109.1967
-          }
-        ]
-      }
-      Lưu ý: "category" CHỈ ĐƯỢC PHÉP chọn 1 trong 5 chữ: WEATHER, ACCIDENT, ROAD_BAD, POLICE, HAZARD_OTHER. Tự ước lượng tọa độ gần đúng.
-    ''';
-
+  /// Phân tích voice command.
+  /// Trả về Map flatten để tương thích code caller cũ.
+  static Future<Map<String, dynamic>?> analyzeCommand(
+    String spokenText, {
+    String? roomId,
+    double? currentLat,
+    double? currentLng,
+  }) async {
     try {
-      final response = await model.generateContent([Content.text(prompt)]);
-      // Dọn dẹp cục text trả về để lấy chuẩn JSON
-      String rawText = response.text ?? '{}';
-      rawText = rawText.replaceAll('```json', '').replaceAll('```', '').trim();
-      return json.decode(rawText);
+      final result = await backendFunctions.httpsCallable('voiceCommand').call({
+        'text': spokenText,
+      });
+
+      // Safe parse — backend trả Map nhưng nested có thể là String/null
+      final raw = Map<String, dynamic>.from(result.data as Map);
+
+      final action = raw['action']?.toString() ?? 'unknown';
+      final responseText = raw['responseText']?.toString() ?? '';
+
+      // params có thể null, String, hoặc Map
+      Map<String, dynamic> params = {};
+      final rawParams = raw['params'];
+      if (rawParams is Map) {
+        params = Map<String, dynamic>.from(rawParams);
+      }
+
+      debugPrint('[GeminiAiApi] Action: $action | Response: $responseText');
+
+      // Return Map flatten — code cũ dùng aiResult['destination'], aiResult['intent']
+      // Map action backend → key cũ frontend đang dùng
+      return {
+        'action': action,
+        'intent': action, // Alias để tương thích code cũ
+        'response': responseText,
+        'responseText': responseText,
+        'params': params,
+        // Convenience fields cho từng action
+        'destination': params['destination_name']?.toString() ??
+            params['place']?.toString(),
+        'destinationName': params['destination_name']?.toString(),
+        'placeType': params['place_type']?.toString(),
+        'radiusKm': params['radius_km'],
+        'reason': params['reason']?.toString(),
+        'originalText': params['original_text']?.toString(),
+        'risks': params['risks'], // Cho code line 100
+      };
+    } on FirebaseFunctionsException catch (e) {
+      debugPrint('[GeminiAiApi] Lỗi gọi AI Backend: ${e.code} - ${e.message}');
+      return null;
     } catch (e) {
-      print('Lỗi AI Gemini: $e');
+      debugPrint('[GeminiAiApi] Lỗi hệ thống: $e');
       return null;
     }
   }
+}
+
+/// Backward-compat: nếu code khác đã import VoiceActionResult, giữ class này.
+class VoiceActionResult {
+  final String action;
+  final Map<String, dynamic> params;
+  final String responseText;
+
+  VoiceActionResult({
+    required this.action,
+    required this.params,
+    required this.responseText,
+  });
+
+  String? get placeType => params['place_type']?.toString();
+  double? get radiusKm => (params['radius_km'] as num?)?.toDouble();
+  String? get sosReason => params['reason']?.toString();
+  String? get originalText => params['original_text']?.toString();
+  bool get isUnknown => action == 'unknown';
 }

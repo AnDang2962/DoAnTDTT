@@ -9,9 +9,11 @@ class SOSButton extends StatefulWidget {
   State<SOSButton> createState() => _SOSButtonState();
 }
 
+// 🔥 ĐỔI THÀNH TickerProviderStateMixin ĐỂ CHẠY 2 ANIMATION CÙNG LÚC
 class _SOSButtonState extends State<SOSButton>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   late AnimationController _controller;
+  late AnimationController _rippleController; // 🔥 Thêm Controller cho gợn sóng
   bool _isHolding = false;
 
   static const Duration holdDuration = Duration(seconds: 3);
@@ -25,6 +27,12 @@ class _SOSButtonState extends State<SOSButton>
       duration: holdDuration,
     );
 
+    // 🔥 Khởi tạo hiệu ứng gợn sóng (tỏa ra trong 1 giây)
+    _rippleController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1000),
+    );
+
     _controller.addStatusListener((status) {
       if (status == AnimationStatus.completed) {
         _triggerSOS();
@@ -35,6 +43,7 @@ class _SOSButtonState extends State<SOSButton>
   void _startHolding() {
     setState(() => _isHolding = true);
     _controller.forward(from: 0);
+    _rippleController.repeat(); // 🔥 Bắt đầu tỏa gợn sóng
   }
 
   void _cancelHolding() {
@@ -43,17 +52,25 @@ class _SOSButtonState extends State<SOSButton>
     setState(() => _isHolding = false);
     _controller.stop();
     _controller.reset();
+    
+    _rippleController.stop(); // 🔥 Dừng gợn sóng
+    _rippleController.reset();
   }
 
   void _triggerSOS() {
     setState(() => _isHolding = false);
     _controller.reset();
+    
+    _rippleController.stop(); // 🔥 Dừng gợn sóng khi đã gửi
+    _rippleController.reset();
+    
     widget.onSOSTriggered();
   }
 
   @override
   void dispose() {
     _controller.dispose();
+    _rippleController.dispose(); // 🔥 Giải phóng bộ nhớ
     super.dispose();
   }
 
@@ -68,8 +85,29 @@ class _SOSButtonState extends State<SOSButton>
         height: 120,
         child: Stack(
           alignment: Alignment.center,
+          clipBehavior: Clip.none, // 🔥 Cho phép gợn sóng tỏa ra ngoài viền 120px mà không bị cắt
           children: [
-            // Vòng tròn đếm ngược
+            // 🔥 THÊM GỢN SÓNG VÀO DƯỚI CÙNG (Dưới vòng đếm ngược và nút)
+            if (_isHolding)
+              AnimatedBuilder(
+                animation: _rippleController,
+                builder: (context, child) {
+                  return Container(
+                    // Kích thước tỏa từ 90 (bằng nút thật) to dần ra 160
+                    width: 90 + (_rippleController.value * 70),
+                    height: 90 + (_rippleController.value * 70),
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      // Màu đỏ nhạt dần khi tỏa ra xa
+                      color: Colors.red.withValues(
+                        alpha: (0.4 - (_rippleController.value * 0.4)).clamp(0.0, 1.0),
+                      ),
+                    ),
+                  );
+                },
+              ),
+
+            // Vòng tròn đếm ngược (Giữ nguyên)
             if (_isHolding)
               AnimatedBuilder(
                 animation: _controller,
@@ -81,7 +119,7 @@ class _SOSButtonState extends State<SOSButton>
                 },
               ),
 
-            // Nút SOS
+            // Nút SOS (Giữ nguyên)
             Container(
               width: 90,
               height: 90,

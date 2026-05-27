@@ -1,31 +1,52 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:async';
-import '../services/sos_service.dart'; // Nối với file Service vừa tạo
 import 'package:provider/provider.dart';
+import 'sos_history_screen.dart';
+
+// Đảm bảo các đường dẫn import này khớp với dự án của bạn
+import '../services/sos_service.dart';
 import '../../group_radar/presentation/providers/members_provider.dart';
 
 class SosScreen extends StatefulWidget {
   const SosScreen({super.key});
+  
   @override
   State<SosScreen> createState() => _SosScreenState();
 }
 
 class _SosScreenState extends State<SosScreen> with TickerProviderStateMixin {
-  late AnimationController _pulseController;
-  late AnimationController _rippleController;
-  Timer? _countdownTimer;
-  double _currentProgress = 0.0;
-  bool _isHolding = false;
+  // 🔥 THÊM DÒNG NÀY VÀO ĐẦU LỚP
+  String _roomId = "";
+  late AnimationController _pulseController;   
+  late AnimationController _rippleController;  
+  Timer? _countdownTimer;                      
+  double _currentProgress = 0.0;               
+  bool _isHolding = false;                     
+
+  // 🔥 Biến khóa trạng thái chặt chẽ (Logic mới)
+  bool _isSending = false; 
 
   final SosService _sosService = SosService();
 
   @override
   void initState() {
     super.initState();
+    // --- [KHÔI PHỤC] Khởi tạo Animations cũ ---
     _pulseController = AnimationController(vsync: this, duration: const Duration(seconds: 1))..repeat(reverse: true);
     _rippleController = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500));
+    // -------------------------------------------
+    
     _sosService.checkAndRequestPermissions();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final provider = Provider.of<MembersProvider>(context, listen: false);
+      if (mounted) {
+        setState(() {
+          _roomId = provider.roomId ?? "";
+        });
+      }
+    });
   }
 
   @override
@@ -33,146 +54,214 @@ class _SosScreenState extends State<SosScreen> with TickerProviderStateMixin {
     _pulseController.dispose();
     _rippleController.dispose();
     _countdownTimer?.cancel();
+    // -------------------------------------
     super.dispose();
   }
 
+  // Hàm hiển thị thông báo SnackBar (Logic mới)
   void _showStatus(String message, Color color) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).clearSnackBars();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(message, style: const TextStyle(fontWeight: FontWeight.bold)), 
-        backgroundColor: color, 
+        content: Text(message, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+        backgroundColor: color,
         behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 4),
       ),
     );
   }
 
   void _startCountdown() {
-    setState(() { _isHolding = true; _currentProgress = 0.0; });
+    if (_isSending) return; // Chặn bấm khi đang gửi (Logic mới)
+
+    setState(() {
+      _isHolding = true;
+      _currentProgress = 0.0;
+    });
     _rippleController.repeat();
-    HapticFeedback.heavyImpact(); 
+    HapticFeedback.lightImpact();
 
     _countdownTimer = Timer.periodic(const Duration(milliseconds: 30), (timer) {
+      if (!mounted) return;
       setState(() {
         _currentProgress += 0.01;
-        if (timer.tick % 10 == 0) HapticFeedback.selectionClick();
-        if (_currentProgress >= 1.0) _executeSOS();
+        if (_currentProgress >= 1.0) {
+          timer.cancel(); // Critical fix: dừng timer
+          _currentProgress = 1.0; // clamp
+          _executeSOS(); // Kích hoạt gửi
+        }
       });
     });
   }
 
   void _stopCountdown() {
+    if (_isSending) return; // Chặn thao tác khi đang gửi (Logic mới)
     _countdownTimer?.cancel();
+    setState(() {
+      _isHolding = false;
+      _currentProgress = 0.0;
+    });
     _rippleController.stop();
     _rippleController.reset();
-    setState(() { _isHolding = false; _currentProgress = 0.0; });
   }
+  // ----------------------------------------------------
 
   void _executeSOS() async {
-    _stopCountdown();
+    // Tạm dừng các Animations để chuyển sang trạng thái load mạng
+    _countdownTimer?.cancel();
+    setState(() {
+      _isHolding = false;
+      _rippleController.stop();
+      _rippleController.reset();
+      _currentProgress = 0.0; // Reset vòng đếm
+    });
+
+    if (_isSending) return; // Logic block
+
+    final currentRoomId = Provider.of<MembersProvider>(context, listen: false).roomId;
+
+    if (currentRoomId == null || currentRoomId.isEmpty) {
+      _showStatus("⚠️ Không thể gửi: Bạn chưa tham gia vào đội nhóm nào!", Colors.orange);
+      return;
+    }
+
+    // 1. Khóa UI (Logic mới chặt chẽ)
+    setState(() => _isSending = true);
+    _showStatus("Đang thu thập tọa độ và phát tín hiệu...", Colors.blue);
+
+    // Rung liên tiếp 5 lần khi báo động (Logic cũ)
     for (int i = 0; i < 5; i++) {
       HapticFeedback.vibrate(); 
       await Future.delayed(const Duration(milliseconds: 150));
     }
-    
-    // 1. Rút ID nhóm động từ Provider của M3
-    final currentRoomId = Provider.of<MembersProvider>(context, listen: false).roomId;
 
-    // Đảm bảo an toàn nếu chưa vào phòng
-    if (currentRoomId.isEmpty) {
-      _showStatus("Lỗi: Chưa có thông tin nhóm!", Colors.red);
-      return;
-    }
-
-    // 2. Chuyển giao nhiệm vụ bắn tín hiệu cho Service kèm roomId
+    // 2. Gọi Service và chờ kết quả Đỏ/Cam/Đen (Logic mới)
     await _sosService.sendEmergencySignal(
-      roomId: currentRoomId,
+      roomId: currentRoomId, 
       onStatusUpdate: _showStatus,
     );
+
+    // 3. Mở khóa UI sau khi hoàn tất
+    if (mounted) {
+      setState(() => _isSending = false);
+    }
   }
 
-  @override
+ @override
   Widget build(BuildContext context) {
     return SizedBox(
-      width: double.infinity, 
+      width: double.infinity,
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.center, // Đảm bảo căn giữa theo chiều ngang
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Text(
-            _isHolding ? "GIỮ ĐỂ PHÁT TÍN HIỆU" : "HỖ TRỢ KHẨN CẤP", 
+            _isSending ? "ĐANG LIÊN LẠC ĐỘI CỨU HỘ..." : "HỖ TRỢ KHẨN CẤP", 
             style: TextStyle(
-              fontSize: 22, 
+              fontSize: 20, 
               fontWeight: FontWeight.bold, 
-              color: _isHolding ? Colors.red : Colors.black87,
+              color: _isSending ? Colors.blue : Colors.black87,
             ),
           ),
+          
           const SizedBox(height: 60),
+          
           Stack(
             alignment: Alignment.center,
             children: [
-              if (_isHolding)
-                ...List.generate(3, (index) {
-                  return AnimatedBuilder(
-                    animation: _rippleController,
-                    builder: (context, child) {
-                      double progress = (_rippleController.value + (index / 3)) % 1.0;
-                      return Container(
-                        width: 150 + (progress * 180), 
-                        height: 150 + (progress * 180),
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle, 
-                          color: Colors.red.withValues(alpha: 1.0 - progress),
-                        ),
-                      );
-                    },
-                  );
-                }),
-              SizedBox(
-                width: 175, 
-                height: 175,
-                child: CircularProgressIndicator(
-                  value: _currentProgress, 
-                  strokeWidth: 8,
-                  backgroundColor: _isHolding ? Colors.red.withValues(alpha: 0.1) : Colors.transparent,
-                  valueColor: const AlwaysStoppedAnimation<Color>(Colors.orangeAccent),
-                ),
-              ),
-              GestureDetector(
-                onTapDown: (_) => _startCountdown(),
-                onTapUp: (_) => _stopCountdown(),
-                onTapCancel: () => _stopCountdown(),
-                child: ScaleTransition(
-                  scale: Tween(begin: 1.0, end: _isHolding ? 1.15 : 1.05).animate(_pulseController),
+              // 1. Hiệu ứng gợn sóng Ripple
+              if (_isHolding && !_isSending)
+                ScaleTransition(
+                  scale: _rippleController,
                   child: Container(
-                    width: 150, 
-                    height: 150,
+                    width: 250,
+                    height: 250,
                     decoration: BoxDecoration(
-                      color: Colors.red, 
-                      shape: BoxShape.circle, 
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.red.withValues(alpha: 0.4), 
-                          blurRadius: _isHolding ? 40 : 20,
-                        ),
-                      ],
-                    ),
-                    child: const Center(
-                      child: Text(
-                        "SOS", 
-                        style: TextStyle(color: Colors.white, fontSize: 42, fontWeight: FontWeight.bold),
+                      shape: BoxShape.circle,
+                      color: Colors.red.withOpacity(
+                        (0.3 - (_rippleController.value * 0.3)).clamp(0.0, 0.3)
                       ),
                     ),
                   ),
                 ),
+              
+              // 2. Vòng đếm ngược viền đỏ
+              if (!_isSending) 
+                SizedBox(
+                  width: 170,
+                  height: 170,
+                  child: CircularProgressIndicator(
+                    value: _currentProgress,
+                    strokeWidth: 8,
+                    valueColor: const AlwaysStoppedAnimation<Color>(Colors.redAccent),
+                  ),
+                ),
+              
+              // 3. Nút bấm SOS chính
+              _isSending 
+                ? const SizedBox(
+                    width: 150, height: 150,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 6, 
+                      color: Colors.red,
+                    ),
+                  )
+                : GestureDetector(
+                    onTapDown: (_) => _startCountdown(),
+                    onTapUp: (_) => _stopCountdown(),
+                    onTapCancel: () => _stopCountdown(),
+                    child: ScaleTransition(
+                      scale: Tween(begin: 1.0, end: _isHolding ? 1.15 : 1.05).animate(_pulseController),
+                      child: Container(
+                        width: 150, 
+                        height: 150,
+                        decoration: BoxDecoration(
+                          color: Colors.red, 
+                          shape: BoxShape.circle, 
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.red.withOpacity(0.4), 
+                              blurRadius: _isHolding ? 40 : 20,
+                            ),
+                          ],
+                        ),
+                        child: const Center(
+                          child: Text(
+                            "SOS", 
+                            style: TextStyle(color: Colors.white, fontSize: 42, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+
+              // 🔥 Nút lịch sử SOS (Đã sửa lỗi crash bằng cách truyền roomId trực tiếp)
+              Positioned(
+                top: 0,
+                right: 0,
+                child: IconButton(
+                  icon: const Icon(Icons.history, color: Colors.grey, size: 30),
+                  tooltip: "Xem lịch sử SOS",
+                  onPressed: () {
+                    // THAY `_roomId` BẰNG BIẾN CHỨA ID PHÒNG CỦA BẠN
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => SosHistoryScreen(roomId: _roomId), 
+                      ),
+                    );
+                  },
+                ),
               ),
             ],
           ),
+          
           const SizedBox(height: 80),
-          const Text(
-            "NHẤN GIỮ ĐỂ GỬI TÍN HIỆU.", 
-            style: TextStyle(color: Colors.grey, letterSpacing: 1.5, fontSize: 12),
+          
+          Text(
+            _isSending ? "Vui lòng giữ bình tĩnh và chờ đợi..." : "NHẤN GIỮ ĐỂ GỬI TÍN HIỆU.", 
+            style: const TextStyle(color: Colors.grey, letterSpacing: 1.5, fontSize: 12),
           ),
         ],
       ),

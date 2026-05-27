@@ -7,12 +7,12 @@ class MapControls extends StatelessWidget {
   final VoidCallback onVoiceCommandPressed;
 
   const MapControls({
-    Key? key,
+    super.key,
     required this.onCompassPressed,
     required this.onZoomInPressed,
     required this.onZoomOutPressed,
     required this.onVoiceCommandPressed,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {

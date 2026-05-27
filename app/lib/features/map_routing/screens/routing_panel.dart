@@ -6,12 +6,12 @@ import 'package:geolocator/geolocator.dart';
 import 'package:route_mate_app/features/main_map/providers/map_state_provider.dart';
 
 import '../services/routing_api.dart';
-import '../services/gemini_ai_api.dart';
 import '../services/weather_api.dart'; // Đảm bảo import API thời tiết của bạn
 import '../../../data/models/warning_marker.dart';
 
 import '../widgets/routing_search_bar.dart'; 
 import '../widgets/voice_record_btn.dart';
+import '../services/gemini_ai_api.dart';
 
 class RoutingPanel extends StatefulWidget {
   const RoutingPanel({Key? key}) : super(key: key);
@@ -21,11 +21,9 @@ class RoutingPanel extends StatefulWidget {
 }
 
 class _RoutingPanelState extends State<RoutingPanel> {
-  final TextEditingController _aiController = TextEditingController();
   
   bool _isLoading = false;
   mapbox.Position? _previewDestPos;
-  String _previewDestName = '';
 
   // BIẾN MỚI CHO HIỂN THỊ THÔNG TIN CHUYẾN ĐI
   bool _isNavigating = false;
@@ -44,86 +42,12 @@ class _RoutingPanelState extends State<RoutingPanel> {
     FocusScope.of(context).unfocus();
     setState(() {
       _previewDestPos = position;
-      _previewDestName = placeName;
       _isNavigating = false; // Tắt chế độ dẫn đường nếu đang có
     });
     await context.read<MapStateProvider>().drawDestinationMarker(position, placeName);
   }
 
-  Future<void> _processAiCommand() async {
-    if (_aiController.text.isEmpty) return;
-    FocusScope.of(context).unfocus();
-    setState(() => _isLoading = true);
-
-    try {
-      final aiResult = await GeminiAiApi.analyzeCommand(_aiController.text);
-      if (aiResult != null) {
-        final destName = aiResult['destination'] as String?;
-        if (destName != null && destName.isNotEmpty) {
-           final destPos = await RoutingApi.getCoordinates(destName);
-           if (destPos != null) await _handleDestinationSelected(destPos, destName);
-        }
-      }
-    } finally {
-      setState(() => _isLoading = false);
-      _aiController.clear();
-    }
-  }
-  Future<void> _reportHazardByVoice(String spokenText) async {
-    if (spokenText.isEmpty) return;
-    
-    _showToast("Đang phân tích cảnh báo...");
-    setState(() => _isLoading = true);
-
-    try {
-      // 1. Gửi câu nói của Leader cho AI Gemini phân tích
-      final aiResult = await GeminiAiApi.analyzeCommand(spokenText);
-      
-      // Giả sử API AI của bạn bóc tách rủi ro vào mảng 'risks'
-      final risksData = aiResult?['risks'] as List?;
-      
-      if (risksData != null && risksData.isNotEmpty) {
-        final risk = risksData.first; // Lấy rủi ro chính
-        
-        // 2. Lấy tọa độ GPS hiện tại của Leader ngay lúc bấm nút
-        Position currentPos = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.high
-        );
-        
-        // 3. Đóng gói thành WarningMarker
-        final newHazard = WarningMarker(
-          id: 'hazard_${DateTime.now().millisecondsSinceEpoch}',
-          category: risk['category'] ?? 'HAZARD_OTHER', // AI trả về ROAD_BAD, ACCIDENT...
-          subtype: risk['subtype'] ?? '',
-          vi: risk['note'] ?? 'Có sự cố',
-          severity: 0.8,
-          baseSeverity: 0.8,
-          lat: currentPos.latitude,
-          lng: currentPos.longitude,
-          note: 'Báo cáo từ Leader',
-          createdAtMs: DateTime.now().millisecondsSinceEpoch,
-          distanceFromRouteKm: 0.0,
-          progressKm: 0.0,
-        );
-
-        // 4. Vẽ ngay lập tức lên bản đồ của Leader
-        // Giả sử provider của bạn có hàm vẽ 1 marker, hoặc bạn gộp vào list marker hiện tại
-        await context.read<MapStateProvider>().drawRiskMarkers([newHazard], {}); 
-        
-        _showToast("🚩 Đã cắm cờ: ${newHazard.vi}!");
-        
-        // TODO: Chỗ này sau này gọi API/Socket bắn data 'newHazard' sang cho Khu vực M3
-      } else {
-        _showToast("AI không nhận diện được sự cố, thử nói lại nhé!");
-      }
-    } catch (e) {
-      debugPrint("Lỗi báo cáo sự cố: $e");
-      _showToast("Lỗi hệ thống ghi nhận sự cố!");
-    } finally {
-      setState(() => _isLoading = false);
-    }
-  }
-  /// HÀM BẮT ĐẦU ĐI (ĐÃ CẬP NHẬT CHIA ĐIỂM 50KM VÀ THỜI TIẾT)
+  /// HÀM XỬ LÝ LỆNH AI (Đã được nâng cấp để nhận trực tiếp câu nói)  /// HÀM BẮT ĐẦU ĐI (ĐÃ CẬP NHẬT CHIA ĐIỂM 50KM VÀ THỜI TIẾT)
   Future<void> _startRouting() async {
     if (_previewDestPos == null) return;
     setState(() => _isLoading = true);
@@ -184,7 +108,7 @@ class _RoutingPanelState extends State<RoutingPanel> {
           }
 
           if (weatherWarnings.isNotEmpty) {
-            await mapProvider.drawRiskMarkers(weatherWarnings, {});
+            await mapProvider.drawWeatherMarkers(weatherWarnings);
             _showToast("Phát hiện ${weatherWarnings.length} khu vực thời tiết xấu!");
           }
         }
@@ -236,46 +160,9 @@ class _RoutingPanelState extends State<RoutingPanel> {
                     });
                   },
                 ),
-                
-                const SizedBox(height: 12),
-
-                // THANH GIỌNG NÓI & AI (Tách rời theo đúng ý bạn)
-                if (!_isNavigating) // Đang đi thì ẩn thanh AI cho gọn
-                  Card(
-                    elevation: 4,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(25)),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
-                      child: Row(
-                        children: [
-                          VoiceRecordButton(
-                            onResult: (text) {
-                              _aiController.text = text;
-                              _processAiCommand();
-                            },
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: TextField(
-                              controller: _aiController,
-                              decoration: const InputDecoration(
-                                hintText: "Dùng giọng nói hoặc gõ phím...",
-                                border: InputBorder.none,
-                              ),
-                              onSubmitted: (_) => _processAiCommand(),
-                            ),
-                          ),
-                          if (_isLoading) 
-                            const Padding(padding: EdgeInsets.all(8.0), child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)))
-                          else
-                            IconButton(icon: const Icon(Icons.send, color: Colors.blue), onPressed: _processAiCommand),
-                        ],
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
+              ], // <--- PHẢI CÓ DẤU NÀY ĐỂ ĐÓNG COLUMN
+            ), // <--- PHẢI CÓ DẤU NÀY ĐỂ ĐÓNG CONTAINER
+          ), 
         ),
 
         // ===================================
@@ -366,8 +253,31 @@ class _RoutingPanelState extends State<RoutingPanel> {
                 ),
                 // Sử dụng lại component VoiceRecordButton xịn sò của bạn
                 child: VoiceRecordButton(
-                  onResult: (spokenText) {
-                    _reportHazardByVoice(spokenText);
+                  onResult: (spokenText) async {
+                    if (spokenText.isEmpty) return;
+                    
+                    final result = await GeminiAiApi.analyzeCommand(spokenText);
+                    if (result == null) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Không kết nối được AI')),
+                      );
+                      return;
+                    }
+                    
+                    final action = result['action']?.toString() ?? 'unknown';
+                    final response = result['responseText']?.toString() ?? '';
+                    
+                    if (response.isNotEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(response),
+                          duration: const Duration(seconds: 3),
+                        ),
+                      );
+                    }
+                    
+                    debugPrint('[VoiceCommand] Action: $action');
+                    // TODO: Xử lý từng action (find_nearby_place, check_weather, ...)
                   },
                 ),
               ),

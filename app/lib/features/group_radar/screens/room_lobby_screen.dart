@@ -1,10 +1,21 @@
 import 'package:flutter/material.dart';
-
-// Đổi lại các đường dẫn import này cho đúng với dự án của nhóm bạn
-import 'group_radar_overlay.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../../../data/models/user_model.dart';
-import '../../../data/repositories/room_repository.dart'; // Đã thêm Import Repo
+import '../../../data/repositories/room_repository.dart';
+import 'group_radar_overlay.dart';
 
+// 🔥 M4 import 2 thư viện này để đồng bộ mã phòng
+import 'package:provider/provider.dart';
+import '../presentation/providers/members_provider.dart';
+// 🔥 ============================================================ 🔥
+
+/// Group Radar Lobby — màn hình tạo/vào phòng nhóm.
+///
+/// Logic flow:
+///   1. User nhập tên + vai trò + bấm Tạo/Vào phòng
+///   2. Gọi backend createRoom/joinRoom
+///   3. Sau khi thành công, switch UI sang GroupRadarOverlay
+///      (KHÔNG Navigator.push để giữ Provider scope của MainShellScreen)
 class RoomLobbyScreen extends StatefulWidget {
   const RoomLobbyScreen({Key? key}) : super(key: key);
 
@@ -13,99 +24,176 @@ class RoomLobbyScreen extends StatefulWidget {
 }
 
 class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
-  bool isCreatingRoom = true;
-  String selectedRole = 'member';
-  bool isLoading = false; // Cờ trạng thái chờ Firebase
-
+  final RoomRepository _roomRepo = RoomRepository();
   final TextEditingController _nameController = TextEditingController();
-  final TextEditingController _roomController = TextEditingController();
-  final RoomRepository _roomRepo =
-      RoomRepository(); // Khởi tạo vũ khí kết nối Backend
+  final TextEditingController _roomIdController = TextEditingController();
+
+  bool _isCreatingRoom = true;
+  String _selectedRole = 'leader';
+  bool _isLoading = false;
+
+  // === State để switch sang GroupRadarOverlay ===
+  String? _activeRoomId;
+  UserModel? _activeUser;
 
   @override
   void dispose() {
     _nameController.dispose();
-    _roomController.dispose();
+    _roomIdController.dispose();
     super.dispose();
   }
 
-  // Hàm xử lý logic chính khi bấm nút
-  Future<void> _handleEnterRoom() async {
+  UserRole _stringToRole(String s) {
+    switch (s) {
+      case 'leader':
+        return UserRole.leader;
+      case 'sweeper':
+        return UserRole.sweeper;
+      default:
+        return UserRole.member;
+    }
+  }
+
+  void _showError(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: Colors.red,
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
+  void _showSuccess(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: Colors.green,
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  void _switchMode(bool toCreating) {
+    setState(() {
+      _isCreatingRoom = toCreating;
+      _selectedRole = toCreating ? 'leader' : 'member';
+    });
+  }
+
+  /// Khi user rời phòng, quay lại lobby form
+  void _onLeaveRoom() async {
+    if (_activeRoomId == null) return;
+
+    final wasLeader = _activeUser?.role == UserRole.leader;
+
+    // Member: gọi backend leaveRoom
+    if (!wasLeader) {
+      await _roomRepo.leaveRoom(_activeRoomId!);
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _activeRoomId = null;
+      _activeUser = null;
+    });
+  }
+
+  /// Xử lý logic Tạo phòng hoặc Vào phòng
+  Future<void> _handleAction() async {
+    if (_isLoading) return;
+
     final name = _nameController.text.trim();
     if (name.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Vui lòng nhập tên hiển thị!')),
-      );
+      _showError('Vui lòng nhập tên hiển thị');
       return;
     }
 
-    if (!isCreatingRoom && _roomController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Vui lòng nhập mã phòng!')));
+    final auth = FirebaseAuth.instance;
+    if (auth.currentUser == null) {
+      _showError('Chưa đăng nhập Firebase. Khởi động lại app.');
       return;
     }
 
-    // Bật hiệu ứng xoay loading
-    setState(() => isLoading = true);
-
-    // 1. Tạo Dummy User (Tạm thời do chưa có hệ thống Login)
-    final dummyUser = UserModel(
-      id: 'UID_${DateTime.now().millisecondsSinceEpoch}',
-      name: name,
-      role: selectedRole == 'leader'
-          ? UserRole.leader
-          : (selectedRole == 'sweeper' ? UserRole.sweeper : UserRole.member),
-    );
-
-    String? finalRoomId;
+    setState(() => _isLoading = true);
 
     try {
-      if (isCreatingRoom) {
-        // 2A. GỌI BACKEND TẠO PHÒNG
-        finalRoomId = await _roomRepo.createRoom(dummyUser);
+      final user = UserModel(
+        id: auth.currentUser!.uid,
+        name: name,
+        role: _stringToRole(_selectedRole),
+      );
 
-        if (finalRoomId == null) {
-          throw Exception('Lấy mã phòng từ Backend thất bại!');
+      String? roomId;
+
+      if (_isCreatingRoom) {
+        roomId = await _roomRepo.createRoom(user);
+
+        if (roomId == null) {
+          _showError('Tạo phòng từ Backend thất bại! Kiểm tra Emulator.');
+          return;
         }
+        _showSuccess('✓ Đã tạo phòng: $roomId');
       } else {
-        // 2B. GỌI BACKEND VÀO PHÒNG CÓ SẴN
-        finalRoomId = _roomController.text.trim();
-        final success = await _roomRepo.joinRoom(finalRoomId, dummyUser);
-
-        if (!success) {
-          throw Exception('Phòng không tồn tại hoặc lỗi kết nối!');
+        final inputRoomId = _roomIdController.text.trim().toUpperCase();
+        if (inputRoomId.isEmpty) {
+          _showError('Vui lòng nhập mã phòng');
+          return;
         }
+
+        final ok = await _roomRepo.joinRoom(inputRoomId, user);
+        if (!ok) {
+          _showError(
+              'Mã phòng "$inputRoomId" không tồn tại hoặc bạn đã trong phòng khác');
+          return;
+        }
+        roomId = inputRoomId;
+        _showSuccess('✓ Đã vào phòng: $roomId');
       }
 
-      // 3. THÀNH CÔNG -> Chuyển sang màn hình Bản đồ
-      if (mounted && finalRoomId != null) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => GroupRadarOverlay(
-              roomId: finalRoomId!, // Truyền ID thật do Backend quản lý
-              currentUser: dummyUser,
-            ),
-          ),
-        );
-      }
+      // Switch UI sang GroupRadarOverlay (cùng context, giữ Provider scope)
+      if (!mounted) return;
+      setState(() {
+        _activeRoomId = roomId;
+        _activeUser = user;
+      });
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.toString()), backgroundColor: Colors.red),
-        );
-      }
+      _showError('Lỗi không xác định: $e');
     } finally {
-      // Tắt loading
-      if (mounted) setState(() => isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    // Đoạn callback này tự động bắn mã phòng lên Provider khi tạo/vào phòng thành công.
+      // Dùng addPostFrameCallback để không gây lỗi build UI của M3.
+      // Toàn bộ logic giao diện bên dưới của M3 được giữ nguyên 100%!
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          Provider.of<MembersProvider>(context, listen: false)
+              .updateRoomIdForSOS(_activeRoomId!);
+        }
+      });
+      // 🔥 ======================================================= 🔥
+    // Đã vào phòng → hiện GroupRadarOverlay (cùng Provider scope với MainShellScreen)
+    if (_activeRoomId != null && _activeUser != null) {
+      return GroupRadarOverlay(
+        roomId: _activeRoomId!,
+        currentUser: _activeUser!,
+        onLeaveRoom: _onLeaveRoom,
+      );
+    }
+
+    // Chưa vào phòng → hiện lobby form
     return Scaffold(
-      appBar: AppBar(title: const Text('Group Radar Lobby')),
+      backgroundColor: Colors.transparent,
+      appBar: AppBar(
+        title: const Text('Group Radar Lobby'),
+        backgroundColor: Colors.white.withOpacity(0.95),
+      ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
@@ -115,21 +203,18 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
               children: [
                 ChoiceChip(
                   label: const Text('Tạo phòng'),
-                  selected: isCreatingRoom,
-                  onSelected: (val) => setState(() {
-                    isCreatingRoom = true;
-                    _roomController.clear();
-                    selectedRole = 'leader'; // Tạo phòng thì auto set là leader
-                  }),
+                  selected: _isCreatingRoom,
+                  onSelected: (val) {
+                    if (val) _switchMode(true);
+                  },
                 ),
                 const SizedBox(width: 16),
                 ChoiceChip(
                   label: const Text('Vào phòng'),
-                  selected: !isCreatingRoom,
-                  onSelected: (val) => setState(() {
-                    isCreatingRoom = false;
-                    selectedRole = 'member'; // Vào phòng thì auto set là member
-                  }),
+                  selected: !_isCreatingRoom,
+                  onSelected: (val) {
+                    if (val) _switchMode(false);
+                  },
                 ),
               ],
             ),
@@ -138,42 +223,46 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
               controller: _nameController,
               decoration: const InputDecoration(
                 labelText: 'Tên hiển thị',
+                hintText: 'VD: Khang',
+                filled: true,
+                fillColor: Colors.white,
                 border: OutlineInputBorder(),
               ),
             ),
-            if (!isCreatingRoom) ...[
+            if (!_isCreatingRoom) ...[
               const SizedBox(height: 16),
               TextField(
-                controller: _roomController,
+                controller: _roomIdController,
+                textCapitalization: TextCapitalization.characters,
+                maxLength: 6,
                 decoration: const InputDecoration(
-                  labelText: 'Mã phòng (Lấy từ Leader)',
+                  labelText: 'Mã phòng (Room ID)',
+                  hintText: 'VD: ABC234',
+                  filled: true,
+                  fillColor: Colors.white,
                   border: OutlineInputBorder(),
                 ),
               ),
             ],
             const SizedBox(height: 16),
             DropdownButtonFormField<String>(
-              value: selectedRole,
+              value: _selectedRole,
               decoration: const InputDecoration(
                 labelText: 'Vai trò trong đoàn',
+                filled: true,
+                fillColor: Colors.white,
                 border: OutlineInputBorder(),
               ),
               items: const [
                 DropdownMenuItem(
-                  value: 'leader',
-                  child: Text('Leader (Dẫn đoàn)'),
-                ),
+                    value: 'leader', child: Text('Leader (Dẫn đoàn)')),
                 DropdownMenuItem(
-                  value: 'member',
-                  child: Text('Member (Thành viên)'),
-                ),
+                    value: 'member', child: Text('Member (Thành viên)')),
                 DropdownMenuItem(
-                  value: 'sweeper',
-                  child: Text('Sweeper (Chốt đoàn)'),
-                ),
+                    value: 'sweeper', child: Text('Sweeper (Chốt đoàn)')),
               ],
               onChanged: (val) {
-                if (val != null) setState(() => selectedRole = val);
+                if (val != null) setState(() => _selectedRole = val);
               },
             ),
             const Spacer(),
@@ -181,24 +270,24 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
               width: double.infinity,
               height: 50,
               child: ElevatedButton(
+                onPressed: _isLoading ? null : _handleAction,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.blue,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  backgroundColor:
+                      _isCreatingRoom ? Colors.blue : Colors.green,
                   foregroundColor: Colors.white,
                 ),
-                onPressed: isLoading
-                    ? null
-                    : _handleEnterRoom, // Khóa nút khi đang tải
-                child: isLoading
+                child: _isLoading
                     ? const SizedBox(
-                        width: 24,
-                        height: 24,
+                        width: 20,
+                        height: 20,
                         child: CircularProgressIndicator(
-                          color: Colors.white,
                           strokeWidth: 2,
+                          color: Colors.white,
                         ),
                       )
                     : Text(
-                        isCreatingRoom ? 'Tạo phòng ngay' : 'Vào phòng',
+                        _isCreatingRoom ? 'Tạo phòng ngay' : 'Vào phòng',
                         style: const TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.bold,
@@ -206,6 +295,7 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
                       ),
               ),
             ),
+            const SizedBox(height: 20),
           ],
         ),
       ),

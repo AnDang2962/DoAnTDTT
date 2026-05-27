@@ -92,8 +92,8 @@ class _SOSMapOverlayState extends State<SOSMapOverlay>
   Future<void> _launchGoogleMapsNavigation() async {
     final double lat = widget.latitude;
     final double lng = widget.longitude;
-    
-    final Uri googleMapsUrl = Uri.parse('https://www.google.com/maps/dir/?api=1&destination=$lat,$lng?daddr=$lat,$lng');
+    // 🔥 SỬA THÀNH LINK ĐỊNH TUYẾN CHUẨN CỦA GOOGLE MAPS 🔥
+    final Uri googleMapsUrl = Uri.parse('https://www.google.com/maps/dir/?api=1&destination=$lat,$lng');
 
     if (await canLaunchUrl(googleMapsUrl)) {
       await launchUrl(googleMapsUrl, mode: LaunchMode.externalApplication);

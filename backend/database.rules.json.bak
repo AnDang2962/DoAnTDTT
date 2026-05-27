@@ -1,0 +1,22 @@
+{
+  "rules": {
+    "gps": {
+      "$roomId": {
+        ".read": "auth != null && root.child('roomMembers').child($roomId).child(auth.uid).val() == true",
+        "$memberId": {
+          ".write": "auth != null && auth.uid == $memberId && root.child('roomMembers').child($roomId).child(auth.uid).val() == true",
+          ".validate": "newData.hasChildren(['lat', 'lng', 'updatedAt']) && newData.child('lat').isNumber() && newData.child('lng').isNumber() && newData.child('updatedAt').isNumber()"
+        }
+      }
+    },
+    "roomMembers": {
+      "$roomId": {
+        ".read": "auth != null",
+        ".write": false,
+        "$memberId": {
+          ".write": false
+        }
+      }
+    }
+  }
+}

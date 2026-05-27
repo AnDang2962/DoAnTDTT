@@ -7,7 +7,7 @@ import '../../../core/services/voice_service.dart';
 class VoiceFab extends StatefulWidget {
   final Function(String text) onVoiceResult;
 
-  const VoiceFab({Key? key, required this.onVoiceResult}) : super(key: key);
+  const VoiceFab({super.key, required this.onVoiceResult});
 
   @override
   State<VoiceFab> createState() => _VoiceFabState();
@@ -42,11 +42,13 @@ class _VoiceFabState extends State<VoiceFab> {
     } else {
       // Chưa nghe -> Bắt đầu nghe
       setState(() => _isListening = true);
-      
+
       // Hiển thị thông báo nhỏ
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Đang nghe... Hãy nói sự cố (Ví dụ: "Có ổ gà phía trước")'),
+          content: Text(
+            'Đang nghe... Hãy nói sự cố (Ví dụ: "Có ổ gà phía trước")',
+          ),
           duration: Duration(seconds: 2),
         ),
       );
@@ -55,10 +57,10 @@ class _VoiceFabState extends State<VoiceFab> {
         onResult: (text) {
           // Khi người dùng nói xong, text sẽ được trả về đây
           setState(() => _isListening = false);
-          
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Đã ghi nhận: "$text"')),
-          );
+
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('Đã ghi nhận: "$text"')));
 
           // Bắn text ra ngoài cho màn hình cha (Overlay) xử lý tiếp (Gọi AI)
           widget.onVoiceResult(text);

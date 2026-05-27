@@ -1,53 +1,82 @@
-import 'dart:convert';
-import 'package:http/http.dart' as http;
-import '../../../core/constants/env_keys.dart';
+import 'package:cloud_functions/cloud_functions.dart';
+import 'package:flutter/foundation.dart';
+import '../../../core/firebase_functions_helper.dart';
 import '../../../data/models/warning_marker.dart';
 
+/// Weather API — gọi Cloud Function `getWeatherAlongRoute` của backend.
+///
+/// **Trước:** Gọi trực tiếp OpenWeatherMap → leak API key ở client.
+/// **Sau:** Gọi backend làm proxy → OpenWeather key giấu ở server.
+///
+/// Display format: "32.5°C • 💧 75% • mưa nhẹ"
 class WeatherApi {
-  /// Lấy dữ liệu thời tiết tại một tọa độ và trả về Cảnh báo (nếu thời tiết xấu)
+  /// Lấy dữ liệu thời tiết tại tọa độ và trả về WarningMarker.
+  ///
+  /// Backend WeatherResult schema (cần backend thêm `humidity` field):
+  ///   {
+  ///     lat, lng,
+  ///     tempC: number,           // Nhiệt độ Celsius
+  ///     humidity: number,        // Độ ẩm %
+  ///     weatherMain: string,     // 'Clear', 'Rain', 'Storm', ...
+  ///     description: string,     // 'mưa nhẹ', 'trời quang' (đã tiếng Việt)
+  ///     isDangerous: boolean,
+  ///     rawCode: number,         // OpenWeatherMap weather ID (200-804)
+  ///   }
   static Future<WarningMarker?> checkWeatherRisk(double lat, double lng) async {
-    final url = 'https://api.openweathermap.org/data/2.5/weather?lat=$lat&lon=$lng&appid=${EnvKeys.openWeatherApiKey}&units=metric&lang=vi';
-
     try {
-      final response = await http.get(Uri.parse(url));
-      
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        
-        final int weatherId = data['weather'][0]['id'];
-        final double temp = data['main']['temp'];
-        final int humidity = data['main']['humidity']; // LẤY THÊM ĐỘ ẨM
+      final result = await backendFunctions
+          .httpsCallable('getWeatherAlongRoute')
+          .call<Map<String, dynamic>>({
+        'lat': lat,
+        'lng': lng,
+      });
 
-        // Phân loại thời tiết thành các subtype gọn gàng
-        String subtype = 'clear';
-        if (weatherId >= 200 && weatherId < 300) subtype = 'storm';
-        else if (weatherId >= 300 && weatherId < 600) subtype = 'rain';
-        else if (weatherId >= 600 && weatherId < 700) subtype = 'snow';
-        else if (weatherId >= 700 && weatherId < 800) subtype = 'fog';
-        else if (weatherId == 800) subtype = 'sunny';
-        else if (weatherId > 800) subtype = 'cloudy';
+      final data = Map<String, dynamic>.from(result.data as Map);
 
-        // LỜI DẪN NGẮN GỌN (Ví dụ: "32.5°C • 💧 75%")
-        String shortText = '${temp.toStringAsFixed(1)}°C • 💧 $humidity%';
+      final tempC = (data['tempC'] as num?)?.toDouble() ?? 0.0;
+      final humidity = (data['humidity'] as num?)?.toInt() ?? 0;
+      final rawCode = (data['rawCode'] as num?)?.toInt() ?? 800;
+      final description = data['description']?.toString() ?? '';
 
-        return WarningMarker(
-          id: 'weather_${DateTime.now().millisecondsSinceEpoch}',
-          category: 'WEATHER',
-          subtype: subtype,
-          vi: shortText,
-          severity: 0.1, // Thời tiết bình thường thì severity thấp
-          baseSeverity: 0.1,
-          lat: lat,
-          lng: lng,
-          note: 'Trạm thời tiết 50km',
-          createdAtMs: DateTime.now().millisecondsSinceEpoch,
-          distanceFromRouteKm: 0.0,
-          progressKm: 0.0,
-        );
+      // Phân loại subtype theo weather ID (logic gốc giữ nguyên)
+      String subtype = 'clear';
+      if (rawCode >= 200 && rawCode < 300) {
+        subtype = 'storm';
+      } else if (rawCode >= 300 && rawCode < 600) {
+        subtype = 'rain';
+      } else if (rawCode >= 600 && rawCode < 700) {
+        subtype = 'snow';
+      } else if (rawCode >= 700 && rawCode < 800) {
+        subtype = 'fog';
+      } else if (rawCode == 800) {
+        subtype = 'sunny';
+      } else if (rawCode > 800) {
+        subtype = 'cloudy';
       }
+
+      // Display gọn: "32.5°C • 💧 75%"
+      String shortText = '${tempC.toStringAsFixed(1)}°C • 💧 $humidity%';
+
+      return WarningMarker(
+        id: 'weather_${DateTime.now().millisecondsSinceEpoch}',
+        category: 'WEATHER',
+        subtype: subtype,
+        vi: shortText,
+        severity: 0.1,
+        baseSeverity: 0.1,
+        lat: lat,
+        lng: lng,
+        note: 'Trạm thời tiết 50km',
+        createdAtMs: DateTime.now().millisecondsSinceEpoch,
+        distanceFromRouteKm: 0.0,
+        progressKm: 0.0,
+      );
+    } on FirebaseFunctionsException catch (e) {
+      debugPrint('[WeatherApi] ✗ Backend error: ${e.code} - ${e.message}');
+      return null;
     } catch (e) {
-      print('Lỗi gọi API Thời tiết: $e');
+      debugPrint('[WeatherApi] ✗ Lỗi: $e');
+      return null;
     }
-    return null;
   }
 }
