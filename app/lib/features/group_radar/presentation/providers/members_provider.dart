@@ -8,6 +8,7 @@ import '../../../../core/utils/geo_utils.dart';
 import '../../../../data/repositories/group_repository.dart';
 import '../../../../core/services/location_service.dart';
 
+
 /// Model để chứa thông tin của một thành viên (vị trí + vai trò)
 class MemberInfo {
   final String id;
@@ -76,6 +77,16 @@ class MembersProvider extends ChangeNotifier {
   String? _currentRoomId;
   String? _currentUserId;
   String? _currentRole;
+
+  // 🔥 NOTE CHO M3 (TỪ M4 - TÍNH NĂNG SOS):
+  // 2 hàm dưới đây chỉ làm nhiệm vụ mở cửa cho Tab SOS đọc được mã phòng.
+  // Tuyệt đối KHÔNG làm ảnh hưởng đến luồng Logic Radar hiện tại của M3. 
+  // M3 vui lòng giữ nguyên để nút báo động hoạt động nhé!
+  String? get roomId => _currentRoomId;
+  void updateRoomIdForSOS(String id) {
+    _currentRoomId = id;
+  }
+  // 🔥 ============================================================ 🔥
 
   // Subscription
   StreamSubscription<Position>? _positionSubscription;

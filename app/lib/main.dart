@@ -11,6 +11,11 @@ import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 
 import 'firebase_options.dart';
 import 'package:route_mate_app/features/main_shell/main_shell_screen.dart';
+import 'package:flutter/foundation.dart';
+import 'package:cloud_functions/cloud_functions.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_database/firebase_database.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 /// =========================================================
 /// EMULATOR SWITCH — Connect frontend với backend emulator
@@ -23,7 +28,11 @@ import 'package:route_mate_app/features/main_shell/main_shell_screen.dart';
 ///   - Release + emulator (cho demo 2 máy thật):
 ///     $ flutter run --release \
 ///         --dart-define=USE_EMULATOR=true \
+<<<<<<< HEAD
 ///         --dart-define=MAC_LAN_IP=172.16.71.145
+=======
+///         --dart-define=MAC_LAN_IP=192.168.0.105
+>>>>>>> 670f9ff7c54bc5c3a841154cfcd1f3c42ee7fb2b
 ///
 ///   - Production (sau này khi deploy backend):
 ///     $ flutter run --release
@@ -33,7 +42,11 @@ import 'package:route_mate_app/features/main_shell/main_shell_screen.dart';
 const bool _useEmulator =
     bool.fromEnvironment('USE_EMULATOR', defaultValue: kDebugMode);
 const String _macLanIp =
+<<<<<<< HEAD
     String.fromEnvironment('MAC_LAN_IP', defaultValue: '172.16.71.145');
+=======
+    String.fromEnvironment('MAC_LAN_IP', defaultValue: '192.168.0.105');
+>>>>>>> 670f9ff7c54bc5c3a841154cfcd1f3c42ee7fb2b
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();

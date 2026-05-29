@@ -4,6 +4,14 @@ import '../../../data/models/user_model.dart';
 import '../../../data/repositories/room_repository.dart';
 import 'group_radar_overlay.dart';
 
+// 🔥 M4 import thư viện này để đồng bộ mã phòng
+import 'package:provider/provider.dart';
+import '../presentation/providers/members_provider.dart';
+
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+// 🔥 ============================================================ 🔥
+
 /// Group Radar Lobby — màn hình tạo/vào phòng nhóm.
 ///
 /// Logic flow:
@@ -148,6 +156,27 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
         _showSuccess('✓ Đã vào phòng: $roomId');
       }
 
+      // 🔥 BẮT ĐẦU ĐOẠN CODE THÊM MỚI CỦA M4: Lấy và lưu FCM Token cho Backend 🔥
+      if (roomId != null) {
+        try {
+          String? token = await FirebaseMessaging.instance.getToken();
+          if (token != null) {
+            await FirebaseFirestore.instance
+                .collection('rooms')
+                .doc(roomId)
+                .set({
+                  'fcmTokens': {
+                    auth.currentUser!.uid: token, // Cập nhật đúng cấu trúc Map mà sos.js cần
+                  }
+                }, SetOptions(merge: true));
+            debugPrint("✅ Đã cập nhật FCM Token lên Firebase: $token");
+          }
+        } catch (e) {
+          debugPrint("⚠ Lỗi cập nhật token: $e");
+        }
+      }
+      // 🔥 KẾT THÚC ĐOẠN CODE THÊM MỚI 🔥
+
       // Switch UI sang GroupRadarOverlay (cùng context, giữ Provider scope)
       if (!mounted) return;
       setState(() {
@@ -163,6 +192,16 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Đoạn callback này tự động bắn mã phòng lên Provider khi tạo/vào phòng thành công.
+      // Dùng addPostFrameCallback để không gây lỗi build UI của M3.
+      // Toàn bộ logic giao diện bên dưới của M3 được giữ nguyên 100%!
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          Provider.of<MembersProvider>(context, listen: false)
+              .updateRoomIdForSOS(_activeRoomId!);
+        }
+      });
+      // 🔥 ======================================================= 🔥
     // Đã vào phòng → hiện GroupRadarOverlay (cùng Provider scope với MainShellScreen)
     if (_activeRoomId != null && _activeUser != null) {
       return GroupRadarOverlay(
@@ -253,6 +292,7 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
             const Spacer(),
             SizedBox(
               width: double.infinity,
+              height: 50,
               child: ElevatedButton(
                 onPressed: _isLoading ? null : _handleAction,
                 style: ElevatedButton.styleFrom(
