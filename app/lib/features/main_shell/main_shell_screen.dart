@@ -15,6 +15,11 @@ import 'package:route_mate_app/features/group_radar/presentation/providers/membe
 import 'package:route_mate_app/data/repositories/group_repository.dart';
 import 'package:route_mate_app/core/services/location_service.dart';
 
+// 🔥 THÊM THƯ VIỆN ĐỂ LẮNG NGHE THÔNG BÁO 🔥
+// 🔥 CÁC THƯ VIỆN MỚI THÊM CHO TÍNH NĂNG NHẬN CẢNH BÁO SOS
+import 'package:firebase_messaging/firebase_messaging.dart';
+import '../sos_emergency/widgets/sos_map_overlay.dart' show SOSMapOverlay;
+
 class MainShellScreen extends StatefulWidget {
   const MainShellScreen({super.key});
 
@@ -31,6 +36,87 @@ class _MainShellScreenState extends State<MainShellScreen> {
     const RoomLobbyScreen(), // Tab 1: Lớp UI Radar của M3
     const SafeArea(child: SosScreen()),
   ];
+
+  // 🔥 BẮT ĐẦU ĐOẠN CODE THÊM MỚI: ĐÓN THÔNG BÁO KHI ĐANG MỞ APP 🔥
+  @override
+  void initState() {
+    super.initState();
+    
+    // 1. Xin quyền hiển thị thông báo (Cần thiết cho Android 13+)
+    FirebaseMessaging.instance.requestPermission();
+
+    // 2. Lắng nghe thông báo khi App đang mở (Foreground)
+    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+      debugPrint('🚨 Bắt được sóng SOS khi đang mở app!');
+      
+      // Bóc tách dữ liệu từ payload của tin nhắn
+      final data = message.data;
+      final double? lat = double.tryParse(data['lat']?.toString() ?? '');
+      final double? lng = double.tryParse(data['lng']?.toString() ?? '');
+      final String battery = data['battery']?.toString() ?? 'Không rõ';
+
+      if (mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false, // Ép người dùng phải tương tác
+          builder: (dialogContext) => AlertDialog(
+            backgroundColor: Colors.red.shade50,
+            title: const Row(
+              children: [
+                Icon(Icons.warning_amber_rounded, color: Colors.red, size: 30),
+                SizedBox(width: 10),
+                Text('BÁO ĐỘNG SOS!', style: TextStyle(color: Colors.red)),
+              ],
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  message.notification?.body ?? 'Có thành viên trong đoàn đang gặp nguy hiểm!',
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  '🔋 Tình trạng pin nạn nhân: $battery%', 
+                  style: TextStyle(color: Colors.red.shade700, fontWeight: FontWeight.w600),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('BỎ QUA', style: TextStyle(color: Colors.grey)),
+              ),
+              // Chỉ hiện nút tới cứu nếu có tọa độ hợp lệ
+              if (lat != null && lng != null)
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                  onPressed: () {
+                    // Đóng hộp thoại
+                    Navigator.of(dialogContext).pop(); 
+                    
+                    // Mở bản đồ dẫn đường
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => SOSMapOverlay(
+                          latitude: lat,
+                          longitude: lng,
+                        ),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.map, color: Colors.white),
+                  label: const Text('TỚI CỨU NGAY', style: TextStyle(color: Colors.white)),
+                ),
+            ],
+          ),
+        );
+      }
+    });
+  }
+  // 🔥 KẾT THÚC ĐOẠN CODE THÊM MỚI 🔥
 
   @override
   Widget build(BuildContext context) {

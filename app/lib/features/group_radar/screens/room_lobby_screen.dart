@@ -4,9 +4,12 @@ import '../../../data/models/user_model.dart';
 import '../../../data/repositories/room_repository.dart';
 import 'group_radar_overlay.dart';
 
-// 🔥 M4 import 2 thư viện này để đồng bộ mã phòng
+// 🔥 M4 import thư viện này để đồng bộ mã phòng
 import 'package:provider/provider.dart';
 import '../presentation/providers/members_provider.dart';
+
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 // 🔥 ============================================================ 🔥
 
 /// Group Radar Lobby — màn hình tạo/vào phòng nhóm.
@@ -152,6 +155,27 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
         roomId = inputRoomId;
         _showSuccess('✓ Đã vào phòng: $roomId');
       }
+
+      // 🔥 BẮT ĐẦU ĐOẠN CODE THÊM MỚI CỦA M4: Lấy và lưu FCM Token cho Backend 🔥
+      if (roomId != null) {
+        try {
+          String? token = await FirebaseMessaging.instance.getToken();
+          if (token != null) {
+            await FirebaseFirestore.instance
+                .collection('rooms')
+                .doc(roomId)
+                .set({
+                  'fcmTokens': {
+                    auth.currentUser!.uid: token, // Cập nhật đúng cấu trúc Map mà sos.js cần
+                  }
+                }, SetOptions(merge: true));
+            debugPrint("✅ Đã cập nhật FCM Token lên Firebase: $token");
+          }
+        } catch (e) {
+          debugPrint("⚠ Lỗi cập nhật token: $e");
+        }
+      }
+      // 🔥 KẾT THÚC ĐOẠN CODE THÊM MỚI 🔥
 
       // Switch UI sang GroupRadarOverlay (cùng context, giữ Provider scope)
       if (!mounted) return;

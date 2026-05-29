@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 class SOSMapOverlay extends StatefulWidget {
   final double latitude;
@@ -21,7 +22,6 @@ class _SOSMapOverlayState extends State<SOSMapOverlay>
   late AnimationController _pulseController;
   late Animation<double> _animation;
 
-  // ĐÃ XÓA biến _mapboxMap thừa để dọn sạch cảnh báo vàng
   CircleAnnotationManager? _circleAnnotationManager;
   CircleAnnotation? _pulseCircle;
 
@@ -29,10 +29,9 @@ class _SOSMapOverlayState extends State<SOSMapOverlay>
   void initState() {
     super.initState();
     
-    // CẤU HÌNH BẢO MẬT: Load Token an toàn
-    MapboxOptions.setAccessToken(
-      const String.fromEnvironment('MAPBOX_ACCESS_TOKEN', defaultValue: 'YOUR_MAPBOX_TOKEN_HERE')
-    );
+    // 🔥 ĐÃ SỬA LỖI TRẮNG MAP: Gọi đúng tên biến MAPBOX_PUBLIC_KEY khớp với file main.dart của bạn
+    final String mapboxToken = dotenv.env['MAPBOX_PUBLIC_KEY'] ?? '';
+    MapboxOptions.setAccessToken(mapboxToken);
 
     _pulseController = AnimationController(
       vsync: this,
@@ -63,10 +62,8 @@ class _SOSMapOverlayState extends State<SOSMapOverlay>
 
     // 1. Dấu chấm đỏ tâm vị trí nạn nhân
     await _circleAnnotationManager!.create(CircleAnnotationOptions(
-      // ĐÃ SỬA: Bỏ .toJson() để hết lỗi đỏ
       geometry: Point(coordinates: Position(widget.longitude, widget.latitude)),
       circleRadius: 12.0,
-      // ĐÃ SỬA: Dùng mã Hex trực tiếp thay cho Colors.red.value để hết cảnh báo xanh
       circleColor: 0xFFFF0000, 
       circleStrokeColor: 0xFFFFFFFF,
       circleStrokeWidth: 3.0,
@@ -74,7 +71,6 @@ class _SOSMapOverlayState extends State<SOSMapOverlay>
 
     // 2. Vòng tròn nhấp nháy 
     _pulseCircle = await _circleAnnotationManager!.create(CircleAnnotationOptions(
-      // ĐÃ SỬA: Bỏ .toJson()
       geometry: Point(coordinates: Position(widget.longitude, widget.latitude)),
       circleRadius: 0.0,
       circleColor: 0xFFFF0000,
@@ -92,58 +88,77 @@ class _SOSMapOverlayState extends State<SOSMapOverlay>
   Future<void> _launchGoogleMapsNavigation() async {
     final double lat = widget.latitude;
     final double lng = widget.longitude;
-    // 🔥 SỬA THÀNH LINK ĐỊNH TUYẾN CHUẨN CỦA GOOGLE MAPS 🔥
-    final Uri googleMapsUrl = Uri.parse('https://www.google.com/maps/dir/?api=1&destination=$lat,$lng');
+    
+    // Link Directions API chính thức của Google Maps
+    final Uri googleMapsUrl = Uri.parse(
+      'https://www.google.com/maps/dir/?api=1&destination=$lat,$lng'
+    );
 
-    if (await canLaunchUrl(googleMapsUrl)) {
+    try {
       await launchUrl(googleMapsUrl, mode: LaunchMode.externalApplication);
-    } else {
-      debugPrint('Không thể mở Google Maps. Có thể máy chưa cài app.');
+    } catch (e) {
+      debugPrint('🚨 Lỗi mở chỉ đường: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Không thể mở Google Maps!')),
+        );
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
-      children: [
-        // LỚP DƯỚI: Bản đồ Mapbox
-        MapWidget(
-          viewport: CameraViewportState(
-            center: Point(coordinates: Position(widget.longitude, widget.latitude)),
-            zoom: 16.5,
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('VỊ TRÍ NẠN NHÂN'),
+        backgroundColor: Colors.red.shade700,
+        foregroundColor: Colors.white,
+      ),
+      body: Stack(
+        children: [
+          // LỚP DƯỚI: Bản đồ Mapbox
+          MapWidget(
+            // 🔥 THÊM DÒNG NÀY: Ép Mapbox phải vẽ bản đồ đường phố (MAPBOX_STREETS) để tránh lỗi nền xám
+            styleUri: MapboxStyles.MAPBOX_STREETS, 
+            
+            // Giữ nguyên cú pháp camera gốc của bạn, không thay đổi
+            viewport: CameraViewportState(
+              center: Point(coordinates: Position(widget.longitude, widget.latitude)),
+              zoom: 16.5,
+            ),
+            onMapCreated: _onMapCreated,
           ),
-          onMapCreated: _onMapCreated,
-        ),
 
-        // LỚP TRÊN: Nút bấm Dẫn đường khẩn cấp
-        Positioned(
-          bottom: 40,
-          left: 20,
-          right: 20,
-          child: ElevatedButton.icon(
-            onPressed: _launchGoogleMapsNavigation,
-            icon: const Icon(Icons.navigation, color: Colors.white, size: 28),
-            label: const Text(
-              "DẪN ĐƯỜNG ĐẾN NẠN NHÂN",
-              style: TextStyle(
-                color: Colors.white, 
-                fontSize: 16, 
-                fontWeight: FontWeight.bold,
-                letterSpacing: 1.2,
+          // LỚP TRÊN: Nút bấm Dẫn đường khẩn cấp
+          Positioned(
+            bottom: 40,
+            left: 20,
+            right: 20,
+            child: ElevatedButton.icon(
+              onPressed: _launchGoogleMapsNavigation,
+              icon: const Icon(Icons.navigation, color: Colors.white, size: 28),
+              label: const Text(
+                "DẪN ĐƯỜNG ĐẾN NẠN NHÂN",
+                style: TextStyle(
+                  color: Colors.white, 
+                  fontSize: 16, 
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 1.2,
+                ),
               ),
-            ),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red.shade700,
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              elevation: 10,
-              shadowColor: Colors.red.withValues(alpha: 0.5),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(30),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red.shade700,
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                elevation: 10,
+                shadowColor: Colors.red.withOpacity(0.5),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(30),
+                ),
               ),
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }

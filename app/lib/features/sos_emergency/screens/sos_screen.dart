@@ -244,11 +244,13 @@ class _SosScreenState extends State<SosScreen> with TickerProviderStateMixin {
                   icon: const Icon(Icons.history, color: Colors.grey, size: 30),
                   tooltip: "Xem lịch sử SOS",
                   onPressed: () {
-                    // THAY `_roomId` BẰNG BIẾN CHỨA ID PHÒNG CỦA BẠN
+                    // Lấy mã phòng ngay tại lúc bấm nút
+                    final currentRoomId = Provider.of<MembersProvider>(context, listen: false).roomId ?? "";
+                    
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (context) => SosHistoryScreen(roomId: _roomId), 
+                        builder: (context) => SosHistoryScreen(roomId: currentRoomId), 
                       ),
                     );
                   },

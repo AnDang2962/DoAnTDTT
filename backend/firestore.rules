@@ -17,7 +17,7 @@ service cloud.firestore {
     // === Rooms ===
     match /rooms/{roomId} {
       allow read: if isMember(roomId);
-      allow write: if false; // chỉ Cloud Function (Admin SDK) ghi
+      allow write: if isAuthed(); // chỉ Cloud Function (Admin SDK) ghi
 
       match /sosLogs/{logId} {
         allow read: if isMember(roomId);
