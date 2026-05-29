@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mapbox;
 import '../../../core/utils/marker_builder.dart';
 import '../../../core/utils/marker_offset.dart';
@@ -14,6 +15,39 @@ class MapStateProvider extends ChangeNotifier {
   mapbox.PolylineAnnotationManager? _polylineManager;
 
   bool get isMapReady => _mapboxMap != null && _pointManager != null && _polylineManager != null;
+
+  // ==========================================
+  // CÁC BIẾN & HÀM QUẢN LÝ ĐA TUYẾN ĐƯỜNG (BẢN V2)
+  // ==========================================
+  List<dynamic> availableRoutes = [];
+  int selectedRouteIndex = 0;
+  bool isNavigating = false;
+  String? previewDestName;
+
+  void setRoutesData(List<dynamic> routes, String destName) {
+    availableRoutes = routes;
+    selectedRouteIndex = 0;
+    isNavigating = false;
+    previewDestName = destName;
+    notifyListeners(); // Phát loa thông báo cho UI cập nhật
+  }
+
+  void selectRoute(int index) {
+    selectedRouteIndex = index;
+    notifyListeners();
+  }
+
+  void startNavigating() {
+    isNavigating = true;
+    notifyListeners();
+  }
+
+  void clearRoutes() {
+    availableRoutes = [];
+    isNavigating = false;
+    previewDestName = null;
+    notifyListeners();
+  }
 
   // Lưu trữ các Annotation để có thể xóa/cập nhật sau này
   final List<mapbox.PointAnnotation> _memberMarkers = [];
@@ -149,6 +183,36 @@ class MapStateProvider extends ChangeNotifier {
     }
   }
 
+  // ==========================================
+  // HÀM VẼ ĐA TUYẾN ĐƯỜNG (PREVIEW)
+  // ==========================================
+  Future<void> drawMultipleRoutesPreview() async {
+    if (_polylineManager == null || availableRoutes.isEmpty) return;
+
+    // 1. Xóa sạch các đường vẽ cũ trên bản đồ
+    await _polylineManager!.deleteAll();
+
+    // 2. Lặp qua danh sách đường và vẽ từng cái một
+    for (int i = 0; i < availableRoutes.length; i++) {
+      final geometry = availableRoutes[i]['geometry']['coordinates'] as List;
+      final points = geometry
+          .map((c) => mapbox.Position(c[0].toDouble(), c[1].toDouble()))
+          .toList();
+
+      final isSelected = (i == selectedRouteIndex);
+
+      // Tuyến đường được chọn thì tô màu Xanh và vẽ dày hơn
+      // Tuyến không được chọn thì tô màu Xám và vẽ mỏng hơn
+      await _polylineManager!.create(
+        mapbox.PolylineAnnotationOptions(
+          geometry: mapbox.LineString(coordinates: points),
+          lineColor: isSelected ? Colors.blue.value : Colors.grey.value,
+          lineWidth: isSelected ? 6.0 : 4.0,
+          lineOpacity: isSelected ? 1.0 : 0.5,
+        ),
+      );
+    }
+  }
   /// 4a. VẼ THỜI TIẾT (lưu riêng _weatherMarkers, không bị xóa khi vẽ risk)
   Future<void> drawWeatherMarkers(List<WarningMarker> weatherList) async {
     if (_pointManager == null) return;

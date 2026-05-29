@@ -218,24 +218,17 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
       return;
     }
 
-    final coords = await RouteUtils.getMapboxRoute(_myLastPos!, destPos);
-    if (coords.isEmpty) return;
+    // Gọi API lấy danh sách nhiều tuyến đường từ RouteUtils
+    final routes = await RouteUtils.getMultipleMapboxRoutes(_myLastPos!, destPos);
+    if (routes.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Không tìm thấy đường đi tới điểm này!')),
+      );
+      return;
+    }
 
-    final polylineData = coords
-        .map((c) => {'lng': c.lng.toDouble(), 'lat': c.lat.toDouble()})
-        .toList();
-
-    final totalKm = await _roomRepo.setRoomRoute(
-      roomId: widget.roomId,
-      polyline: polylineData,
-      startName: 'Vị trí hiện tại',
-      endName: placeName,
-    );
-
-    if (totalKm == null) return;
-
-    // === THÊM WEATHER BUBBLES dọc route ===
-    await _loadWeatherAlongRoute(coords);
+    // ĐÃ SỬA: Đẩy thẳng data vào Trạm trung chuyển Provider để bên file panel đọc được
+    context.read<MapStateProvider>().setRoutesData(routes, placeName);
   }
 
   /// Trích waypoints mỗi 50km và lấy weather cho từng waypoint

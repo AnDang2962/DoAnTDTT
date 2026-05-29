@@ -8,10 +8,12 @@ import 'package:geolocator/geolocator.dart'; // Thêm dòng này để đo kho�
 class RouteUtils {
   /// Hàm gọi API Mapbox Directions để tìm đường đi từ điểm A đến điểm B.
   /// Lộ trình trả về là một danh sách các tọa độ (đường gấp khúc - polyline) để vẽ lên bản đồ.
-  static Future<List<mapbox.Position>> getMapboxRoute(mapbox.Position start, mapbox.Position destination) async {
+  /// Hàm MỚI: Gọi API Mapbox lấy NHIỀU tuyến đường để người dùng lựa chọn
+  static Future<List<dynamic>> getMultipleMapboxRoutes(mapbox.Position start, mapbox.Position destination) async {
     final token = dotenv.env['MAPBOX_PUBLIC_KEY'] ?? '';
-    // Gọi API tìm đường cho xe máy/ô tô (driving)
-    final url = 'https://api.mapbox.com/directions/v5/mapbox/driving/${start.lng},${start.lat};${destination.lng},${destination.lat}?geometries=geojson&access_token=$token';
+    
+    // ĐÃ THÊM: alternatives=true (để lấy đường phụ) và overview=full (để nét vẽ mượt hơn)
+    final url = 'https://api.mapbox.com/directions/v5/mapbox/driving/${start.lng},${start.lat};${destination.lng},${destination.lat}?geometries=geojson&alternatives=true&overview=full&access_token=$token';
 
     try {
       final response = await http.get(Uri.parse(url));
@@ -19,14 +21,12 @@ class RouteUtils {
         final data = json.decode(response.body);
         // Nếu API trả về danh sách lộ trình hợp lệ
         if (data['routes'] != null && data['routes'].isNotEmpty) {
-          // Trích xuất mảng tọa độ của lộ trình đầu tiên
-          final coordinates = data['routes'][0]['geometry']['coordinates'] as List;
-          // Chuyển đổi thành dạng Mapbox Position
-          return coordinates.map((coord) => mapbox.Position(coord[0], coord[1])).toList();
+          // Trả về NGUYÊN BẢN toàn bộ mảng routes (chứa cả distance, duration và geometry)
+          return data['routes'];
         }
       }
     } catch (e) {
-      print("Lỗi API Mapbox: $e");
+      print("Lỗi API Mapbox lấy nhiều lộ trình: $e");
     }
     return [];
   }

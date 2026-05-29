@@ -1,57 +1,54 @@
-import 'dart:math' show cos, sqrt, asin; // Thư viện toán học cho Haversine
+import 'dart:math' show cos, sqrt, asin;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mapbox;
 import 'package:geolocator/geolocator.dart';
+import 'package:route_mate_app/core/utils/route_utils.dart';
 import 'package:route_mate_app/features/main_map/providers/map_state_provider.dart';
 
 import '../services/routing_api.dart';
-import '../services/weather_api.dart'; // Đảm bảo import API thời tiết của bạn
+import '../services/weather_api.dart'; 
 import '../../../data/models/warning_marker.dart';
+import '../../../data/repositories/room_repository.dart'; // ĐÃ THÊM: Import RoomRepository
 
 import '../widgets/routing_search_bar.dart'; 
 import '../widgets/voice_record_btn.dart';
 import '../services/gemini_ai_api.dart';
 
 class RoutingPanel extends StatefulWidget {
-  const RoutingPanel({Key? key}) : super(key: key);
+  final String? roomId; // ĐÃ THÊM: Biến nhận ID phòng (nếu có)
+  
+  // ĐÃ SỬA: Cho phép truyền roomId vào
+  const RoutingPanel({Key? key, this.roomId}) : super(key: key); 
 
   @override
   State<RoutingPanel> createState() => _RoutingPanelState();
 }
 
+// ĐÃ XÓA: Các biến trôi nổi ở ngoài class (đã chuyển vào Provider và State)
+
 class _RoutingPanelState extends State<RoutingPanel> {
-  
-  bool _isLoading = false;
+  bool _isLoading = false; // ĐÃ CHUYỂN VÀO ĐÂY: Biến loading nằm đúng vị trí
   mapbox.Position? _previewDestPos;
 
   // BIẾN MỚI CHO HIỂN THỊ THÔNG TIN CHUYẾN ĐI
-  bool _isNavigating = false;
   double _routeDistance = 0.0;
   int _routeDurationMins = 0;
+
+  // ĐÃ THÊM: Khởi tạo RoomRepository để đẩy lộ trình lên Firebase
+  final RoomRepository _roomRepo = RoomRepository(); 
 
   /// THUẬT TOÁN HAVERSINE (Tính khoảng cách đường chim bay)
   double _haversineDistance(double lat1, double lon1, double lat2, double lon2) {
     var p = 0.017453292519943295;
     var a = 0.5 - cos((lat2 - lat1) * p)/2 + 
             cos(lat1 * p) * cos(lat2 * p) * (1 - cos((lon2 - lon1) * p))/2;
-    return 12742 * asin(sqrt(a)); // Trả về số Kilomet
+    return 12742 * asin(sqrt(a)); 
   }
 
-  Future<void> _handleDestinationSelected(mapbox.Position position, String placeName) async {
-    FocusScope.of(context).unfocus();
-    setState(() {
-      _previewDestPos = position;
-      _isNavigating = false; // Tắt chế độ dẫn đường nếu đang có
-    });
-    await context.read<MapStateProvider>().drawDestinationMarker(position, placeName);
-  }
-
-  /// HÀM XỬ LÝ LỆNH AI (Đã được nâng cấp để nhận trực tiếp câu nói)  /// HÀM BẮT ĐẦU ĐI (ĐÃ CẬP NHẬT CHIA ĐIỂM 50KM VÀ THỜI TIẾT)
-  Future<void> _startRouting() async {
-    if (_previewDestPos == null) return;
-    setState(() => _isLoading = true);
-    final mapProvider = context.read<MapStateProvider>();
+  Future<void> _handleDestinationSelected(mapbox.Position destPos, String placeName) async {
+    FocusScope.of(context).unfocus(); 
+    setState(() => _isLoading = true); 
 
     try {
       Position? currentPos;
@@ -68,81 +65,131 @@ class _RoutingPanelState extends State<RoutingPanel> {
       double startLat = currentPos?.latitude ?? 12.2388;
       final startPos = mapbox.Position(startLng, startLat);
 
-      final routeCoords = await RoutingApi.getRoute(startPos, _previewDestPos!);
-      
-      if (routeCoords.isNotEmpty) {
-        await mapProvider.drawRoutePolyline(routeCoords);
+      // Gọi API Mapbox lấy danh sách ĐA TUYẾN ĐƯỜNG
+      final routes = await RouteUtils.getMultipleMapboxRoutes(startPos, destPos);
 
-        // ==========================================
-        // THUẬT TOÁN CHIA MATCH POINTS (50KM/LẦN)
-        // ==========================================
-        double totalDist = 0.0;
-        double distSinceLast = 0.0;
-        List<mapbox.Position> matchPoints = [];
-
-        for (int i = 0; i < routeCoords.length - 1; i++) {
-          double d = _haversineDistance(
-            routeCoords[i].lat.toDouble(), routeCoords[i].lng.toDouble(),
-            routeCoords[i+1].lat.toDouble(), routeCoords[i+1].lng.toDouble()
-          );
-          totalDist += d;
-          distSinceLast += d;
-
-          // Cứ đi được thêm 50km thì đánh dấu 1 điểm
-          if (distSinceLast >= 50.0) {
-            matchPoints.add(routeCoords[i+1]);
-            distSinceLast = 0.0; // Reset lại bộ đếm
-          }
-        }
-
-        // ==========================================
-        // GỌI API THỜI TIẾT TẠI CÁC MATCH POINTS
-        // ==========================================
-        if (matchPoints.isNotEmpty) {
-          _showToast("Đang phân tích thời tiết trên lộ trình...");
-          List<WarningMarker> weatherWarnings = [];
-          
-          for (var pt in matchPoints) {
-            final warning = await WeatherApi.checkWeatherRisk(pt.lat.toDouble(), pt.lng.toDouble());
-            if (warning != null) weatherWarnings.add(warning);
-          }
-
-          if (weatherWarnings.isNotEmpty) {
-            await mapProvider.drawWeatherMarkers(weatherWarnings);
-            _showToast("Phát hiện ${weatherWarnings.length} khu vực thời tiết xấu!");
-          }
-        }
-
-        // CHUYỂN SANG GIAO DIỆN DẪN ĐƯỜNG (Hiện thời gian, quãng đường)
-        setState(() {
-          _previewDestPos = null; 
-          _isNavigating = true;
-          _routeDistance = totalDist;
-          // Phượt xe máy mặc định tốc độ 40km/h
-          _routeDurationMins = (totalDist / 40.0 * 60).round(); 
-        });
-
-      } else {
-        _showToast("Không tìm thấy lộ trình!");
+      if (routes.isEmpty) {
+        _showToast('Không tìm thấy đường đi tới điểm này!');
+        return;
       }
+
+      // Bắn toàn bộ 2-3 tuyến đường vào Trạm trung chuyển Provider
+      if (mounted) {
+        context.read<MapStateProvider>().setRoutesData(routes, placeName);
+        // Bắn lệnh vẽ 2-3 đường preview lên bản đồ
+        await context.read<MapStateProvider>().drawMultipleRoutesPreview();
+        await context.read<MapStateProvider>().drawDestinationMarker(destPos, placeName);
+      }
+
+      setState(() {
+        _previewDestPos = destPos;
+      });
+
     } catch (e) {
-      _showToast("Lỗi vẽ đường!");
+      _showToast('Có lỗi xảy ra khi tìm đường: $e');
+    } finally {
+      setState(() => _isLoading = false); 
+    }
+  }
+
+  Future<void> _startRouting() async {
+    final mapProvider = context.read<MapStateProvider>();
+    
+    if (mapProvider.availableRoutes.isEmpty) return; 
+    
+    setState(() => _isLoading = true);
+
+    try {
+      final chosenRoute = mapProvider.availableRoutes[mapProvider.selectedRouteIndex];
+      final geometry = chosenRoute['geometry']['coordinates'] as List;
+
+      // 1. Xử lý tọa độ cho bản đồ 
+      final routeCoords = geometry
+          .map((c) => mapbox.Position(c[0].toDouble(), c[1].toDouble()))
+          .toList();
+          
+      // 2. SỬA LỖI ÉP KIỂU TẠI ĐÂY: Bắt buộc khai báo rõ List<Map<String, double>>
+      final List<Map<String, double>> polylineData = geometry
+          .map<Map<String, double>>((c) => {
+                'lng': (c[0] as num).toDouble(),
+                'lat': (c[1] as num).toDouble()
+              })
+          .toList();
+
+      // 3. Vẽ đường đơn tuyến chính thức lên bản đồ
+      await mapProvider.drawRoutePolyline(routeCoords);
+
+      // 4. KIỂM TRA VÀ ĐẨY LÊN FIREBASE (Đoạn của bạn được giữ nguyên 100%)
+      if (widget.roomId != null && widget.roomId!.isNotEmpty) {
+        await _roomRepo.setRoomRoute(
+          roomId: widget.roomId!, 
+          polyline: polylineData,
+          startName: 'Vị trí hiện tại',
+          endName: mapProvider.previewDestName ?? 'Điểm đến', 
+        );
+      }
+
+      // THUẬT TOÁN CHIA MATCH POINTS (50KM/LẦN)
+      double totalDist = 0.0;
+      double distSinceLast = 0.0;
+      List<mapbox.Position> matchPoints = [];
+
+      for (int i = 0; i < routeCoords.length - 1; i++) {
+        double d = _haversineDistance(
+          routeCoords[i].lat.toDouble(), routeCoords[i].lng.toDouble(),
+          routeCoords[i+1].lat.toDouble(), routeCoords[i+1].lng.toDouble()
+        );
+        totalDist += d;
+        distSinceLast += d;
+
+        if (distSinceLast >= 50.0) {
+          matchPoints.add(routeCoords[i+1]);
+          distSinceLast = 0.0;
+        }
+      }
+
+      // GỌI API THỜI TIẾT TẠI CÁC MATCH POINTS
+      if (matchPoints.isNotEmpty) {
+        _showToast("Đang phân tích thời tiết trên lộ trình...");
+        List<WarningMarker> weatherWarnings = [];
+        
+        for (var pt in matchPoints) {
+          final warning = await WeatherApi.checkWeatherRisk(pt.lat.toDouble(), pt.lng.toDouble());
+          if (warning != null) weatherWarnings.add(warning);
+        }
+
+        if (weatherWarnings.isNotEmpty) {
+          await mapProvider.drawWeatherMarkers(weatherWarnings);
+          _showToast("Phát hiện ${weatherWarnings.length} khu vực thời tiết xấu!");
+        }
+      }
+
+      mapProvider.startNavigating();
+
+      setState(() {
+        _routeDistance = chosenRoute['distance'] / 1000.0; 
+        _routeDurationMins = (chosenRoute['duration'] / 60.0).round(); 
+      });
+
+    } catch (e) {
+      _showToast("Lỗi vẽ đường: $e");
     } finally {
       setState(() => _isLoading = false);
     }
   }
 
   void _showToast(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final mapProvider = context.watch<MapStateProvider>();
+
     return Stack(
       children: [
-        // ===================================
-        // KHỐI UI 1: THANH TÌM KIẾM (Đỉnh màn hình)
-        // ===================================
         Align(
           alignment: Alignment.topCenter,
           child: Container(
@@ -154,43 +201,80 @@ class _RoutingPanelState extends State<RoutingPanel> {
                   onDestinationSelected: _handleDestinationSelected,
                   onClear: () {
                     context.read<MapStateProvider>().clearAll();
+                    mapProvider.clearRoutes(); 
                     setState(() {
                       _previewDestPos = null;
-                      _isNavigating = false;
                     });
                   },
                 ),
-              ], // <--- PHẢI CÓ DẤU NÀY ĐỂ ĐÓNG COLUMN
-            ), // <--- PHẢI CÓ DẤU NÀY ĐỂ ĐÓNG CONTAINER
+              ],
+            ),
           ), 
         ),
 
-        // ===================================
-        // KHỐI UI 2: NÚT BẮT ĐẦU (Xem trước)
-        // ===================================
-        if (_previewDestPos != null && !_isLoading && !_isNavigating)
+        if (mapProvider.availableRoutes.isNotEmpty && !_isLoading && !mapProvider.isNavigating)
           Align(
             alignment: Alignment.bottomCenter,
-            child: Padding(
-              padding: const EdgeInsets.only(bottom: 24.0),
-              child: ElevatedButton.icon(
-                onPressed: _startRouting,
-                icon: const Icon(Icons.two_wheeler, color: Colors.white), // Đổi icon xe máy
-                label: const Text('Bắt đầu đi', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.blue[700],
-                  padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 15),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-                  elevation: 8,
-                ),
+            child: Container(
+              margin: const EdgeInsets.only(bottom: 24.0, left: 16, right: 16),
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, -2))],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Khoảng cách: ${(mapProvider.availableRoutes[mapProvider.selectedRouteIndex]['distance'] / 1000).toStringAsFixed(1)} km '
+                    '• Thời gian: ${(mapProvider.availableRoutes[mapProvider.selectedRouteIndex]['duration'] / 60).toStringAsFixed(0)} phút',
+                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.blueAccent),
+                  ),
+                  const SizedBox(height: 12),
+                  
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: List.generate(mapProvider.availableRoutes.length, (index) {
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 6.0),
+                          child: ChoiceChip(
+                            label: Text('Tuyến ${index + 1}', style: TextStyle(fontWeight: index == mapProvider.selectedRouteIndex ? FontWeight.bold : FontWeight.normal)),
+                            selected: mapProvider.selectedRouteIndex == index,
+                            selectedColor: Colors.blue[100],
+                            onSelected: (selected) async {
+                              if (selected) {
+                                mapProvider.selectRoute(index); // Đổi index trong Provider
+                                // Kêu Provider vẽ lại màu (Đổi đường Xám thành Xanh)
+                                await mapProvider.drawMultipleRoutesPreview();
+                              }
+                            },
+                          ),
+                        );
+                      }),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  ElevatedButton.icon(
+                    onPressed: _startRouting,
+                    icon: const Icon(Icons.two_wheeler, color: Colors.white),
+                    label: const Text('Bắt đầu đi', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blue[700],
+                      minimumSize: const Size(double.infinity, 50),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                      elevation: 4,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
 
-        // ===================================
-        // KHỐI UI 3: BẢNG THÔNG TIN CHUYẾN ĐI (Giống Google Maps)
-        // ===================================
-        if (_isNavigating)
+        if (mapProvider.isNavigating)
           Align(
             alignment: Alignment.bottomCenter,
             child: Container(
@@ -199,7 +283,7 @@ class _RoutingPanelState extends State<RoutingPanel> {
               decoration: BoxDecoration(
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(20),
-                boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 10, offset: const Offset(0, -2))],
+                boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, -2))],
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -209,7 +293,6 @@ class _RoutingPanelState extends State<RoutingPanel> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        // Đổi phút ra Giờ/Phút cho đẹp
                         _routeDurationMins > 60 
                           ? '${_routeDurationMins ~/ 60} giờ ${_routeDurationMins % 60} phút'
                           : '$_routeDurationMins phút',
@@ -225,7 +308,7 @@ class _RoutingPanelState extends State<RoutingPanel> {
                   FloatingActionButton(
                     onPressed: () {
                       context.read<MapStateProvider>().clearAll();
-                      setState(() => _isNavigating = false);
+                      mapProvider.clearRoutes(); 
                     },
                     backgroundColor: Colors.redAccent,
                     child: const Icon(Icons.close, color: Colors.white),
@@ -234,11 +317,8 @@ class _RoutingPanelState extends State<RoutingPanel> {
               ),
             ),
           ),
-          // ===================================
-        // KHỐI UI 4: NÚT BÁO CÁO SỰ CỐ DÀNH CHO LEADER
-        // (Chỉ hiện ra khi đang trong chế độ Dẫn đường)
-        // ===================================
-        if (_isNavigating)
+
+        if (mapProvider.isNavigating)
           Align(
             alignment: Alignment.centerRight,
             child: Padding(
@@ -251,16 +331,13 @@ class _RoutingPanelState extends State<RoutingPanel> {
                     BoxShadow(color: Colors.redAccent.withOpacity(0.4), blurRadius: 15, spreadRadius: 2)
                   ]
                 ),
-                // Sử dụng lại component VoiceRecordButton xịn sò của bạn
                 child: VoiceRecordButton(
                   onResult: (spokenText) async {
                     if (spokenText.isEmpty) return;
                     
                     final result = await GeminiAiApi.analyzeCommand(spokenText);
                     if (result == null) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Không kết nối được AI')),
-                      );
+                      _showToast('Không kết nối được AI');
                       return;
                     }
                     
@@ -268,16 +345,10 @@ class _RoutingPanelState extends State<RoutingPanel> {
                     final response = result['responseText']?.toString() ?? '';
                     
                     if (response.isNotEmpty) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(response),
-                          duration: const Duration(seconds: 3),
-                        ),
-                      );
+                      _showToast(response);
                     }
                     
                     debugPrint('[VoiceCommand] Action: $action');
-                    // TODO: Xử lý từng action (find_nearby_place, check_weather, ...)
                   },
                 ),
               ),

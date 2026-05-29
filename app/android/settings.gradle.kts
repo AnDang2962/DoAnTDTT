@@ -1,5 +1,5 @@
 pluginManagement {
-    val flutterSdkPath = "D:/TaiLieu/flutter_windows_3.41.9-stable/flutter"
+    val flutterSdkPath = "D:/DaiHoc/DoAn_TDTT/flutter"
 
     includeBuild("$flutterSdkPath/packages/flutter_tools/gradle")
 
