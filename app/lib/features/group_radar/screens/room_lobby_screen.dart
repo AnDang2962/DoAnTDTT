@@ -213,7 +213,7 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
 
     // Chưa vào phòng → hiện lobby form
     return Scaffold(
-      backgroundColor: Colors.transparent,
+      backgroundColor: Colors.white,
       appBar: AppBar(
         title: const Text('Group Radar Lobby'),
         backgroundColor: Colors.white.withOpacity(0.95),
