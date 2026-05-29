@@ -319,4 +319,10 @@ class MapStateProvider extends ChangeNotifier {
     }
     notifyListeners();
   }
+  // Hàm này chỉ dọn dẹp dữ liệu preview (Bảng chọn), giữ nguyên đường đi chính thức
+  void clearRoutesData() {
+    availableRoutes = [];
+    selectedRouteIndex = 0;
+    notifyListeners();
+  }
 }

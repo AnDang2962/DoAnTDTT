@@ -218,7 +218,7 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
       return;
     }
 
-    // Gọi API lấy danh sách nhiều tuyến đường từ RouteUtils
+    // Gọi API lấy danh sách nhiều tuyến đường từ RouteUtils (Chỉ giữ lại 1 dòng này)
     final routes = await RouteUtils.getMultipleMapboxRoutes(_myLastPos!, destPos);
     if (routes.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -227,8 +227,12 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
       return;
     }
 
-    // ĐÃ SỬA: Đẩy thẳng data vào Trạm trung chuyển Provider để bên file panel đọc được
-    context.read<MapStateProvider>().setRoutesData(routes, placeName);
+    // Bắn data vào Provider VÀ ra lệnh vẽ Preview Đa tuyến đường
+    if (mounted) {
+      context.read<MapStateProvider>().setRoutesData(routes, placeName);
+      await context.read<MapStateProvider>().drawDestinationMarker(destPos, placeName);
+      await context.read<MapStateProvider>().drawMultipleRoutesPreview();
+    }
   }
 
   /// Trích waypoints mỗi 50km và lấy weather cho từng waypoint
@@ -543,7 +547,124 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
                 ),
               ),
             ),
+          // ==========================================
+          // BẢNG CHỌN ĐA TUYẾN ĐƯỜNG & NÚT BẮT ĐẦU
+          // ==========================================
+          Positioned(
+            bottom: 100, // Đặt cao hơn 2 cái nút tròn ở dưới cùng
+            left: 16,
+            right: 16,
+            child: Consumer<MapStateProvider>(
+              builder: (context, mapProvider, child) {
+                // Nếu chưa tìm đường thì ẩn bảng này đi
+                if (mapProvider.availableRoutes.isEmpty) return const SizedBox.shrink();
 
+                return Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black26,
+                        blurRadius: 10,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // 1. THANH CHỌN TUYẾN ĐƯỜNG (Vuốt ngang)
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          children: List.generate(
+                            mapProvider.availableRoutes.length,
+                            (index) => Padding(
+                              padding: const EdgeInsets.only(right: 8.0),
+                              child: ChoiceChip(
+                                label: Text('Tuyến ${index + 1}', style: const TextStyle(fontWeight: FontWeight.bold)),
+                                selected: mapProvider.selectedRouteIndex == index,
+                                selectedColor: Colors.blue.withOpacity(0.3),
+                                onSelected: (selected) async {
+                                  if (selected) {
+                                    mapProvider.selectRoute(index);
+                                    // Báo Provider đổi màu đường trên bản đồ
+                                    await mapProvider.drawMultipleRoutesPreview();
+                                  }
+                                },
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      
+                      const SizedBox(height: 16),
+
+                      // 2. NÚT CHỐT LỘ TRÌNH VÀ ĐI CÙNG NHÓM
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: () async {
+                            final selectedRoute = mapProvider.availableRoutes[mapProvider.selectedRouteIndex];
+                            final geometry = selectedRoute['geometry']['coordinates'] as List;
+
+                            // 1. Chuẩn bị tọa độ vẽ và Firebase
+                            final routeCoords = geometry
+                                .map((c) => mapbox.Position((c[0] as num).toDouble(), (c[1] as num).toDouble()))
+                                .toList();
+                            
+                            final List<Map<String, double>> polylineData = geometry
+                                .map<Map<String, double>>((c) => {
+                                      'lng': (c[0] as num).toDouble(),
+                                      'lat': (c[1] as num).toDouble()
+                                    })
+                                .toList();
+
+                            // 2. 👉 DỌN BẢNG CHỌN NGAY LẬP TỨC! (Giúp UI phản hồi tức thì, không bị đơ)
+                            mapProvider.clearRoutesData();
+
+                            // 3. Dùng Try-Catch để lỡ mạng lag/lỗi API thì app không bị chết đứng
+                            try {
+                              // Xóa nháp, vẽ đường Xanh chuẩn xác
+                              await mapProvider.drawRoutePolyline(routeCoords);
+
+                              // Đẩy lên Firebase ngay
+                              if (widget.roomId.isNotEmpty) {
+                                await _roomRepo.setRoomRoute(
+                                  roomId: widget.roomId, 
+                                  polyline: polylineData,
+                                  startName: 'Vị trí hiện tại',
+                                  endName: mapProvider.previewDestName ?? 'Điểm đến', 
+                                );
+                              }
+
+                              // Chạy thời tiết dọc đường (để cuối cùng, có lỗi cũng kệ)
+                              await _loadWeatherAlongRoute(routeCoords);
+                              
+                            } catch (e) {
+                              debugPrint('Lỗi ngầm khi bắt đầu đi: $e');
+                            }
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.blue,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                          ),
+                          child: const Text('🚀 Bắt đầu đi cùng nhóm', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+          // ==========================================
           Positioned(
             bottom: 30,
             right: 20,
