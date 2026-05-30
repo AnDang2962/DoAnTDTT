@@ -360,196 +360,189 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
             ),
           ),
 
-          // BẢNG THÔNG TIN PHÒNG (HUD PANEL) - ĐÃ LÀM GỌN & THÊM HIỆU ỨNG MỞ RỘNG
+          // KHỐI GỘP: BẢNG THÔNG TIN & CẢNH BÁO (Tự động đẩy nhau, không đè)
           Positioned(
             top: 90,
             left: 16,
-            child: GestureDetector(
-              onTap: () {
-                setState(() {
-                  _isInfoExpanded = !_isInfoExpanded; // Đảo trạng thái thu/mở
-                });
-              },
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 300),
-                curve: Curves.easeInOut,
-                width: _isInfoExpanded ? 240 : 150, // Chiều rộng linh hoạt
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.95),
-                  borderRadius: BorderRadius.circular(12),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.15),
-                      blurRadius: 8,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // PHẦN HEADER LÚC NÀO CŨNG HIỆN (Bản thu gọn)
-                    Row(
-                      children: [
-                        const Icon(Icons.tag, color: Colors.blue, size: 18),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(
-                            'Phòng: ${widget.roomId}',
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 14,
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        Icon(
-                          _isInfoExpanded
-                              ? Icons.keyboard_arrow_up
-                              : Icons.keyboard_arrow_down,
-                          color: Colors.grey,
+            right: 16, // Ép right: 16 để khung cảnh báo dãn dài ra được
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // 1. BẢNG THÔNG TIN PHÒNG (HUD PANEL)
+                GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      _isInfoExpanded = !_isInfoExpanded;
+                    });
+                  },
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 300),
+                    curve: Curves.easeInOut,
+                    width: _isInfoExpanded ? 240 : 150,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.95),
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.15),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
                         ),
                       ],
                     ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // PHẦN HEADER LÚC NÀO CŨNG HIỆN
+                        Row(
+                          children: [
+                            const Icon(Icons.tag, color: Colors.blue, size: 18),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                'Phòng: ${widget.roomId}',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 14,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            Icon(
+                              _isInfoExpanded
+                                  ? Icons.keyboard_arrow_up
+                                  : Icons.keyboard_arrow_down,
+                              color: Colors.grey,
+                            ),
+                          ],
+                        ),
 
-                    // PHẦN CHI TIẾT (Chỉ hiện khi _isInfoExpanded == true)
-                    if (_isInfoExpanded) ...[
-                      const Divider(height: 16),
-                      // 1. Trạng thái đội hình
-                      Row(
-                        children: [
-                          Icon(
-                            _isTooFar ? Icons.gpp_bad : Icons.verified_user,
-                            color: _isTooFar ? Colors.red : Colors.green,
-                            size: 16,
-                          ),
-                          const SizedBox(width: 6),
-                          Expanded(
-                            child: Text(
-                              'Đội hình: ${_isTooFar ? "Đứt đoàn" : "Ổn định"}',
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.bold,
+                        // PHẦN CHI TIẾT
+                        if (_isInfoExpanded) ...[
+                          const Divider(height: 16),
+                          Row(
+                            children: [
+                              Icon(
+                                _isTooFar ? Icons.gpp_bad : Icons.verified_user,
                                 color: _isTooFar ? Colors.red : Colors.green,
+                                size: 16,
+                              ),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  'Đội hình: ${_isTooFar ? "Đứt đoàn" : "Ổn định"}',
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.bold,
+                                    color: _isTooFar ? Colors.red : Colors.green,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            'Thành viên (${_memberInfo.length}):',
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.black87,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Container(
+                            constraints: const BoxConstraints(maxHeight: 150),
+                            child: SingleChildScrollView(
+                              child: Column(
+                                children: _memberInfo.entries.map((entry) {
+                                  final info = entry.value as Map;
+                                  final name = info['displayName']?.toString() ?? 'Ẩn danh';
+                                  final role = info['role']?.toString() ?? 'member';
+
+                                  Color roleColor = Colors.orange;
+                                  if (role == 'leader') roleColor = Colors.blue;
+                                  if (role == 'sweeper') roleColor = Colors.green;
+
+                                  return Padding(
+                                    padding: const EdgeInsets.only(bottom: 6.0),
+                                    child: Row(
+                                      children: [
+                                        Icon(Icons.two_wheeler, size: 14, color: roleColor),
+                                        const SizedBox(width: 6),
+                                        Expanded(
+                                          child: Text(
+                                            name,
+                                            style: const TextStyle(fontSize: 13),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                          decoration: BoxDecoration(
+                                            color: roleColor.withOpacity(0.1),
+                                            borderRadius: BorderRadius.circular(4),
+                                          ),
+                                          child: Text(
+                                            role.toUpperCase(),
+                                            style: TextStyle(
+                                              fontSize: 9,
+                                              fontWeight: FontWeight.bold,
+                                              color: roleColor,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                }).toList(),
                               ),
                             ),
                           ),
                         ],
-                      ),
-                      const SizedBox(height: 12),
+                      ],
+                    ),
+                  ),
+                ),
 
-                      // 2. Danh sách thành viên chi tiết
-                      Text(
-                        'Thành viên (${_memberInfo.length}):',
-                        style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.black87,
+                // 2. KHOẢNG CÁCH NẾU CÓ CẢNH BÁO
+                if (_isTooFar) const SizedBox(height: 16),
+
+                // 3. CẢNH BÁO ĐỨT ĐOÀN
+                if (_isTooFar)
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withOpacity(0.9),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Row(
+                      children: [
+                        Icon(
+                          Icons.warning_amber_rounded,
+                          color: Colors.white,
+                          size: 30,
                         ),
-                      ),
-                      const SizedBox(height: 8),
-                      // Giới hạn chiều cao danh sách để không che hết bản đồ nếu nhóm quá đông
-                      Container(
-                        constraints: const BoxConstraints(maxHeight: 150),
-                        child: SingleChildScrollView(
-                          child: Column(
-                            children: _memberInfo.entries.map((entry) {
-                              final info = entry.value as Map;
-                              final name =
-                                  info['displayName']?.toString() ?? 'Ẩn danh';
-                              final role = info['role']?.toString() ?? 'member';
-
-                              // Đổi màu theo vai trò cho sinh động
-                              Color roleColor = Colors.orange; // Member
-                              if (role == 'leader') roleColor = Colors.blue;
-                              if (role == 'sweeper') roleColor = Colors.green;
-
-                              return Padding(
-                                padding: const EdgeInsets.only(bottom: 6.0),
-                                child: Row(
-                                  children: [
-                                    Icon(
-                                      Icons.two_wheeler,
-                                      size: 14,
-                                      color: roleColor,
-                                    ),
-                                    const SizedBox(width: 6),
-                                    Expanded(
-                                      child: Text(
-                                        name,
-                                        style: const TextStyle(fontSize: 13),
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                    ),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 4,
-                                        vertical: 2,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: roleColor.withOpacity(0.1),
-                                        borderRadius: BorderRadius.circular(4),
-                                      ),
-                                      child: Text(
-                                        role.toUpperCase(),
-                                        style: TextStyle(
-                                          fontSize: 9,
-                                          fontWeight: FontWeight.bold,
-                                          color: roleColor,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              );
-                            }).toList(),
+                        SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'CẢNH BÁO ĐỨT ĐỘI HÌNH!\nBạn đang cách xa các thành viên khác hơn 2km.',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                         ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
+                      ],
+                    ),
+                  ),
+              ],
             ),
           ),
-
-          // Cảnh báo đứt đoàn
-          if (_isTooFar)
-            Positioned(
-              top: 200,
-              left: 16,
-              right: 16,
-              child: Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.red.withOpacity(0.9),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Row(
-                  children: [
-                    Icon(
-                      Icons.warning_amber_rounded,
-                      color: Colors.white,
-                      size: 30,
-                    ),
-                    SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        'CẢNH BÁO ĐỨT ĐỘI HÌNH!\nBạn đang cách xa các thành viên khác hơn 2km.',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
 
           Positioned(
             bottom: 30,
