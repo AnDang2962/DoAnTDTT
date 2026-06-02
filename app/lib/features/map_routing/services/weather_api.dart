@@ -1,6 +1,6 @@
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/foundation.dart';
-import '../../../core/firebase_functions_helper.dart';
+import '../../../core/services/firebase_functions_helper.dart';
 import '../../../data/models/warning_marker.dart';
 
 /// Weather API — gọi Cloud Function `getWeatherAlongRoute` của backend.

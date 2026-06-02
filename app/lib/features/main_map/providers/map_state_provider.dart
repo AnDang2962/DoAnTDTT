@@ -1,27 +1,29 @@
-import 'package:flutter/foundation.dart';
+import 'dart:async';
+import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:flutter_compass/flutter_compass.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mapbox;
 import '../../../core/utils/marker_builder.dart';
 import '../../../core/utils/marker_offset.dart';
+import '../../../core/utils/geo_utils.dart';
 import '../../../data/models/warning_marker.dart';
-import 'package:geolocator/geolocator.dart';
+import '../../../core/services/location_service.dart';
 
-/// Provider chịu trách nhiệm quản lý toàn bộ trạng thái và các điểm đánh dấu (Markers) trên Mapbox.
-/// Việc tách rời logic vẽ bản đồ vào đây giúp giao diện (UI) gọn gàng hơn
-/// và các tính năng khác (Radar, Tìm đường) có thể dùng chung một bản đồ duy nhất.
 class MapStateProvider extends ChangeNotifier {
   mapbox.MapboxMap? _mapboxMap;
   mapbox.PointAnnotationManager? _pointManager;
   mapbox.PolylineAnnotationManager? _polylineManager;
+  StreamSubscription<CompassEvent>? _compassSub;
 
   bool get isMapReady => _mapboxMap != null && _pointManager != null && _polylineManager != null;
 
-  // ==========================================
-  // CÁC BIẾN & HÀM QUẢN LÝ ĐA TUYẾN ĐƯỜNG (BẢN V2)
-  // ==========================================
   List<dynamic> availableRoutes = [];
   int selectedRouteIndex = 0;
   bool isNavigating = false;
+  bool _isFollowing = false;
+  bool get isFollowing => _isFollowing;
+  double? _lastBearing;
+  double get lastBearing => _lastBearing ?? 0.0;
   String? previewDestName;
 
   void setRoutesData(List<dynamic> routes, String destName) {
@@ -29,7 +31,7 @@ class MapStateProvider extends ChangeNotifier {
     selectedRouteIndex = 0;
     isNavigating = false;
     previewDestName = destName;
-    notifyListeners(); // Phát loa thông báo cho UI cập nhật
+    notifyListeners();
   }
 
   void selectRoute(int index) {
@@ -39,67 +41,157 @@ class MapStateProvider extends ChangeNotifier {
 
   void startNavigating() {
     isNavigating = true;
+    _isFollowing = true;
+    notifyListeners();
+  }
+
+  void resetNorth() {
+    _lastBearing = 0.0;
+    _mapboxMap?.easeTo(
+      mapbox.CameraOptions(bearing: 0.0, pitch: 0.0),
+      mapbox.MapAnimationOptions(duration: 500),
+    );
+    notifyListeners();
+  }
+
+  void setFollowing(bool value) {
+    if (_isFollowing == value) return;
+    _isFollowing = value;
     notifyListeners();
   }
 
   void clearRoutes() {
     availableRoutes = [];
     isNavigating = false;
+    _isFollowing = false;
     previewDestName = null;
     notifyListeners();
   }
 
-  // Lưu trữ các Annotation để có thể xóa/cập nhật sau này
+  List<mapbox.Position> _fullRouteCoords = [];
+  mapbox.Position? _lastTrimPos;
+  bool isOffRoute = false;
+
+  void setFullRoute(List<mapbox.Position> coords) {
+    _fullRouteCoords = List.from(coords);
+    _lastTrimPos = null;
+    isOffRoute = false;
+  }
+
+  // Debounce 50m để tránh redraw quá nhiều.
+  Future<void> trimRouteToProgress(mapbox.Position currentPos) async {
+    if (_polylineManager == null || _fullRouteCoords.length < 2) return;
+
+    if (_lastTrimPos != null) {
+      final movedM = calculateDistanceMeters(
+        startLat: _lastTrimPos!.lat.toDouble(),
+        startLng: _lastTrimPos!.lng.toDouble(),
+        endLat: currentPos.lat.toDouble(),
+        endLng: currentPos.lng.toDouble(),
+      );
+      if (movedM < 50) return;
+    }
+    _lastTrimPos = currentPos;
+
+    double minDist = double.infinity;
+    int bestIdx = 0;
+    for (int i = 0; i < _fullRouteCoords.length; i++) {
+      final d = calculateDistanceMeters(
+        startLat: currentPos.lat.toDouble(),
+        startLng: currentPos.lng.toDouble(),
+        endLat: _fullRouteCoords[i].lat.toDouble(),
+        endLng: _fullRouteCoords[i].lng.toDouble(),
+      );
+      if (d < minDist) { minDist = d; bestIdx = i; }
+    }
+
+    // 80m threshold cho phép lệch nhỏ khi đi sát lề đường.
+    final newOffRoute = minDist > 80;
+    if (newOffRoute != isOffRoute) {
+      isOffRoute = newOffRoute;
+      notifyListeners();
+    }
+    if (isOffRoute) return;
+
+    final passed = [..._fullRouteCoords.sublist(0, bestIdx + 1), currentPos];
+    final remaining = [currentPos, ..._fullRouteCoords.sublist(bestIdx + 1)];
+    if (remaining.length < 2) return;
+
+    await _polylineManager!.deleteAll();
+
+    if (passed.length >= 2) {
+      await _polylineManager!.create(mapbox.PolylineAnnotationOptions(
+        geometry: mapbox.LineString(coordinates: passed),
+        lineColor: 0xFFBDBDBD,
+        lineWidth: 4.0,
+        lineOpacity: 0.6,
+      ));
+    }
+
+    await _polylineManager!.create(mapbox.PolylineAnnotationOptions(
+      geometry: mapbox.LineString(coordinates: remaining),
+      lineColor: 0xFF1F4E79,
+      lineWidth: 6.0,
+      lineOpacity: 1.0,
+    ));
+  }
+
   final List<mapbox.PointAnnotation> _memberMarkers = [];
   final List<mapbox.PointAnnotation> _destMarkers = [];
   final List<mapbox.PointAnnotation> _weatherMarkers = [];
   final List<mapbox.PointAnnotation> _riskMarkers = [];
 
-  // Vị trí của điểm đến
+  List<WarningMarker> weatherWarnings = [];
   mapbox.Position? _destinationPosition;
 
-  /// Hàm được gọi khi Widget Bản đồ vừa load xong (onMapCreated)
   Future<void> onMapCreated(mapbox.MapboxMap mapboxMap) async {
     _mapboxMap = mapboxMap;
-    // Khởi tạo các công cụ vẽ Marker và Polyline của Mapbox 2.x
     _pointManager = await mapboxMap.annotations.createPointAnnotationManager();
     _polylineManager = await mapboxMap.annotations.createPolylineAnnotationManager();
-    
-    // Bật hiển thị chấm xanh (Vị trí hiện tại của user trên máy)
     await _mapboxMap?.location.updateSettings(
       mapbox.LocationComponentSettings(enabled: true, pulsingEnabled: true),
     );
-    
-    // SỬA LỖI NHẢY VỀ QUẬN 1: Ngay khi map sẵn sàng, tự động bắt GPS và bay thẳng tới đó
-    _flyToCurrentLocation();
-    
+    _startCompassTracking();
+    flyToCurrentLocation();
     notifyListeners();
-    debugPrint('[MapStateProvider] Bản đồ đã sẵn sàng!');
   }
 
-  /// Tự động lấy GPS hiện tại và đưa camera về đó
-  Future<void> _flyToCurrentLocation() async {
-    try {
-      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) return;
-
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) return;
-      }
-
-      final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
+  void _startCompassTracking() {
+    _compassSub?.cancel();
+    _compassSub = FlutterCompass.events?.listen((event) {
+      final heading = event.heading;
+      if (heading == null || !_isFollowing || isNavigating) return;
+      // Khi đứng yên (không nav): xoay map theo la bàn điện thoại
+      _lastBearing = heading;
+      _mapboxMap?.easeTo(
+        mapbox.CameraOptions(bearing: heading),
+        mapbox.MapAnimationOptions(duration: 100),
       );
-      
-      flyTo(mapbox.Position(position.longitude, position.latitude), zoom: 15.0);
+    });
+  }
+
+  Future<void> flyToCurrentLocation() async {
+    _isFollowing = true;
+    notifyListeners();
+    try {
+      final position = await LocationService().getCurrentPosition();
+      if (position == null) return;
+      _mapboxMap?.flyTo(
+        mapbox.CameraOptions(
+          center: mapbox.Point(
+            coordinates: mapbox.Position(position.longitude, position.latitude),
+          ),
+          zoom: 15.0,
+          bearing: isNavigating ? _lastBearing : null,
+          pitch: isNavigating ? 45.0 : 0.0,
+        ),
+        mapbox.MapAnimationOptions(duration: 800),
+      );
     } catch (e) {
-      debugPrint('[MapStateProvider] Lỗi lấy GPS tự động: $e');
+      debugPrint('[MapStateProvider] flyToCurrentLocation error: $e');
     }
   }
 
-  /// Bay camera tới một tọa độ nhất định
   void flyTo(mapbox.Position position, {double zoom = 14.0}) {
     _mapboxMap?.flyTo(
       mapbox.CameraOptions(
@@ -110,27 +202,31 @@ class MapStateProvider extends ChangeNotifier {
     );
   }
 
-  /// 1. VẼ ĐƯỜNG ĐI (POLYLINE)
-  Future<void> drawRoutePolyline(List<mapbox.Position> coords) async {
-    if (_polylineManager == null) return;
-
-    // Xóa đường cũ
-    await _polylineManager!.deleteAll();
-    
-    // Vẽ đường mới màu xanh dương đậm
-    await _polylineManager!.create(mapbox.PolylineAnnotationOptions(
-      geometry: mapbox.LineString(coordinates: coords),
-      lineColor: 0xFF1F4E79, // Xanh RouteMate
-      lineWidth: 6.0,
-    ));
-    debugPrint('[MapStateProvider] Đã vẽ lộ trình với ${coords.length} điểm.');
+  void easeTo(mapbox.Position position, {double zoom = 15.0, double? bearing}) {
+    if (bearing != null) _lastBearing = bearing;
+    _mapboxMap?.easeTo(
+      mapbox.CameraOptions(
+        center: mapbox.Point(coordinates: position),
+        zoom: zoom,
+        bearing: bearing,
+        pitch: isNavigating ? 45.0 : 0.0,
+      ),
+      mapbox.MapAnimationOptions(duration: 300),
+    );
   }
 
-  /// 2. VẼ ĐIỂM ĐẾN
+  Future<void> drawRoutePolyline(List<mapbox.Position> coords) async {
+    if (_polylineManager == null) return;
+    await _polylineManager!.deleteAll();
+    await _polylineManager!.create(mapbox.PolylineAnnotationOptions(
+      geometry: mapbox.LineString(coordinates: coords),
+      lineColor: 0xFF1F4E79,
+      lineWidth: 6.0,
+    ));
+  }
+
   Future<void> drawDestinationMarker(mapbox.Position dest, String name) async {
     if (_pointManager == null) return;
-
-    // Xóa điểm đến cũ
     for (final m in _destMarkers) {
       try { await _pointManager!.delete(m); } catch (_) {}
     }
@@ -146,25 +242,20 @@ class MapStateProvider extends ChangeNotifier {
       ),
     );
     _destMarkers.add(annotation);
-    
     flyTo(dest, zoom: 13.0);
   }
 
-  /// 3. VẼ CÁC THÀNH VIÊN TRONG NHÓM (Dùng cho Group Radar)
   Future<void> drawMemberMarkers(
-    Map<String, mapbox.Position> locations, 
-    Map<String, String> displayNames, 
-    Map<String, String> roles
+    Map<String, mapbox.Position> locations,
+    Map<String, String> displayNames,
+    Map<String, String> roles,
   ) async {
     if (_pointManager == null) return;
-
-    // Xóa marker cũ
     for (final m in _memberMarkers) {
       try { await _pointManager!.delete(m); } catch (_) {}
     }
     _memberMarkers.clear();
 
-    // Vẽ marker mới cho từng người
     for (final entry in locations.entries) {
       final uid = entry.key;
       final pos = entry.value;
@@ -183,26 +274,16 @@ class MapStateProvider extends ChangeNotifier {
     }
   }
 
-  // ==========================================
-  // HÀM VẼ ĐA TUYẾN ĐƯỜNG (PREVIEW)
-  // ==========================================
   Future<void> drawMultipleRoutesPreview() async {
     if (_polylineManager == null || availableRoutes.isEmpty) return;
-
-    // 1. Xóa sạch các đường vẽ cũ trên bản đồ
     await _polylineManager!.deleteAll();
 
-    // 2. Lặp qua danh sách đường và vẽ từng cái một
     for (int i = 0; i < availableRoutes.length; i++) {
       final geometry = availableRoutes[i]['geometry']['coordinates'] as List;
       final points = geometry
           .map((c) => mapbox.Position(c[0].toDouble(), c[1].toDouble()))
           .toList();
-
       final isSelected = (i == selectedRouteIndex);
-
-      // Tuyến đường được chọn thì tô màu Xanh và vẽ dày hơn
-      // Tuyến không được chọn thì tô màu Xám và vẽ mỏng hơn
       await _polylineManager!.create(
         mapbox.PolylineAnnotationOptions(
           geometry: mapbox.LineString(coordinates: points),
@@ -213,14 +294,14 @@ class MapStateProvider extends ChangeNotifier {
       );
     }
   }
-  /// 4a. VẼ THỜI TIẾT (lưu riêng _weatherMarkers, không bị xóa khi vẽ risk)
+
   Future<void> drawWeatherMarkers(List<WarningMarker> weatherList) async {
     if (_pointManager == null) return;
-
     for (final m in _weatherMarkers) {
       try { await _pointManager!.delete(m); } catch (_) {}
     }
     _weatherMarkers.clear();
+    weatherWarnings = List.from(weatherList);
 
     final occupiedPositions = <mapbox.Position>[];
     if (_destinationPosition != null) occupiedPositions.add(_destinationPosition!);
@@ -250,46 +331,30 @@ class MapStateProvider extends ChangeNotifier {
     }
   }
 
-  /// 4b. VẼ CÁC CẢNH BÁO RỦI RO (Có thuật toán chống đè)
   Future<void> drawRiskMarkers(List<WarningMarker> risks, Map<String, mapbox.Position> memberLocations) async {
     if (_pointManager == null) return;
-
     for (final m in _riskMarkers) {
       try { await _pointManager!.delete(m); } catch (_) {}
     }
     _riskMarkers.clear();
 
-    // Thu thập các vị trí ĐÃ BỊ CHIẾM (Để tránh vẽ đè lên nhau)
-    final occupiedPositions = <mapbox.Position>[];
-    
-    // Tránh đè lên thành viên
-    for (final memberPos in memberLocations.values) {
-      occupiedPositions.add(memberPos);
-    }
-    // Tránh đè lên điểm đến
-    if (_destinationPosition != null) {
-      occupiedPositions.add(_destinationPosition!);
-    }
-    // Tránh đè lên thời tiết
-    for (final m in _weatherMarkers) {
-      occupiedPositions.add(m.geometry.coordinates);
-    }
+    final occupiedPositions = <mapbox.Position>[
+      ...memberLocations.values,
+      if (_destinationPosition != null) _destinationPosition!,
+      ..._weatherMarkers.map((m) => m.geometry.coordinates),
+    ];
 
-    // Bắt đầu vẽ cảnh báo
     for (final risk in risks) {
-      // Gọi thuật toán tính toán vị trí mới (dời lên trên nếu bị đè)
       final adjustedPos = MarkerOffsetHelper.adjustForOverlap(
         existingPositions: occupiedPositions,
         newLat: risk.lat,
         newLng: risk.lng,
       );
-
       final image = await MarkerBuilder.buildBubble(
         emoji: risk.emoji,
         label: risk.vi,
         color: risk.color,
       );
-      
       final annotation = await _pointManager!.create(
         mapbox.PointAnnotationOptions(
           geometry: mapbox.Point(coordinates: adjustedPos),
@@ -298,14 +363,40 @@ class MapStateProvider extends ChangeNotifier {
         ),
       );
       _riskMarkers.add(annotation);
-      
-      // Đưa vị trí vừa vẽ vào danh sách "Đã bị chiếm" để các marker sau tránh ra
       occupiedPositions.add(adjustedPos);
     }
   }
-  
-  /// Xóa sạch mọi thứ trên bản đồ (Khi người dùng hủy lộ trình)
+
+  void fitBoundsToPositions(List<mapbox.Position> positions) {
+    if (_mapboxMap == null || positions.isEmpty) return;
+    if (positions.length == 1) { flyTo(positions.first, zoom: 14.0); return; }
+
+    final lats = positions.map((p) => p.lat.toDouble());
+    final lngs = positions.map((p) => p.lng.toDouble());
+    final centerLat = (lats.reduce(min) + lats.reduce(max)) / 2;
+    final centerLng = (lngs.reduce(min) + lngs.reduce(max)) / 2;
+    final maxSpan = max(lats.reduce(max) - lats.reduce(min), lngs.reduce(max) - lngs.reduce(min));
+
+    double zoom = 14.0;
+    if (maxSpan > 0.1) zoom = 10.0;
+    else if (maxSpan > 0.05) zoom = 11.5;
+    else if (maxSpan > 0.01) zoom = 13.0;
+
+    flyTo(mapbox.Position(centerLng, centerLat), zoom: zoom);
+  }
+
+  @override
+  void dispose() {
+    _compassSub?.cancel();
+    super.dispose();
+  }
+
   Future<void> clearAll() async {
+    _fullRouteCoords = [];
+    _lastTrimPos = null;
+    isOffRoute = false;
+    _isFollowing = false;
+    weatherWarnings = [];
     if (_pointManager != null) {
       await _pointManager!.deleteAll();
       _memberMarkers.clear();
@@ -319,7 +410,7 @@ class MapStateProvider extends ChangeNotifier {
     }
     notifyListeners();
   }
-  // Hàm này chỉ dọn dẹp dữ liệu preview (Bảng chọn), giữ nguyên đường đi chính thức
+
   void clearRoutesData() {
     availableRoutes = [];
     selectedRouteIndex = 0;

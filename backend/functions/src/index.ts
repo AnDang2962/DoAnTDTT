@@ -35,6 +35,9 @@ export { voiceCommand, describeSosLocation } from './ai';
 // === Module 7: Geocoding (Mapbox proxy) ===
 export { geocodePlace } from './geocode';
 
+// === Module 8: Nearby Places (Mapbox POI proxy) ===
+export { searchNearbyPlace } from './places';
+
 // === Module 6: Risk Labels (Crowdsourced Hazards) ===
 export {
   reportRiskLabel,

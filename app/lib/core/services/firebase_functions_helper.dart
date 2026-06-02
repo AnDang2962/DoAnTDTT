@@ -1,6 +1,6 @@
 import 'package:cloud_functions/cloud_functions.dart';
 
-/// Helper: tất cả backend functions deploy ở region 'asia-southeast1'.
-/// LUÔN dùng helper này khi gọi httpsCallable.
+/// Emulator được cấu hình một lần duy nhất trong main.dart.
+/// Helper này chỉ trả về instance đã được cấu hình sẵn.
 FirebaseFunctions get backendFunctions =>
     FirebaseFunctions.instanceFor(region: 'asia-southeast1');

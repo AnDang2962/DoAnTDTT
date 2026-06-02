@@ -1,9 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../../core/services/voice_service.dart';
 
-/// Nút thu âm nổi (Floating Action Button) dùng để báo cáo rủi ro.
-/// Khi bấm vào sẽ kích hoạt VoiceService để lắng nghe giọng nói Tiếng Việt.
-/// Kết quả nhận diện (Text) sẽ được trả về qua hàm callback [onVoiceResult].
 class VoiceFab extends StatefulWidget {
   final Function(String text) onVoiceResult;
 
@@ -16,53 +13,47 @@ class VoiceFab extends StatefulWidget {
 class _VoiceFabState extends State<VoiceFab> {
   final VoiceService _voiceService = VoiceService();
   bool _isListening = false;
+  String _currentText = '';
 
   @override
   void initState() {
     super.initState();
-    // Khởi tạo Microphone ngay khi màn hình hiện lên
-    _initVoice();
-  }
-
-  Future<void> _initVoice() async {
-    await _voiceService.initialize();
+    _voiceService.initialize();
   }
 
   @override
   void dispose() {
-    _voiceService.dispose();
+    _voiceService.stopListening();
     super.dispose();
   }
 
   void _toggleListening() async {
     if (_isListening) {
-      // Đang nghe -> Dừng lại
       await _voiceService.stopListening();
-      setState(() => _isListening = false);
+      if (mounted) setState(() => _isListening = false);
     } else {
-      // Chưa nghe -> Bắt đầu nghe
-      setState(() => _isListening = true);
-
-      // Hiển thị thông báo nhỏ
+      setState(() {
+        _isListening = true;
+        _currentText = '';
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text(
-            'Đang nghe... Hãy nói sự cố (Ví dụ: "Có ổ gà phía trước")',
-          ),
+          content: Text('Đang nghe... Hãy nói sự cố (Ví dụ: "Có ổ gà phía trước")'),
           duration: Duration(seconds: 2),
         ),
       );
-
       await _voiceService.startListening(
+        onPartialResult: (text) {
+          if (mounted) setState(() => _currentText = text);
+        },
         onResult: (text) {
-          // Khi người dùng nói xong, text sẽ được trả về đây
-          setState(() => _isListening = false);
-
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text('Đã ghi nhận: "$text"')));
-
-          // Bắn text ra ngoài cho màn hình cha (Overlay) xử lý tiếp (Gọi AI)
+          if (mounted) setState(() {
+            _isListening = false;
+            _currentText = '';
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Đã ghi nhận: "$text"')),
+          );
           widget.onVoiceResult(text);
         },
       );
@@ -71,14 +62,38 @@ class _VoiceFabState extends State<VoiceFab> {
 
   @override
   Widget build(BuildContext context) {
-    return FloatingActionButton(
-      heroTag: 'voice_fab', // Tránh lỗi trùng heroTag nếu có nhiều FAB
-      onPressed: _toggleListening,
-      backgroundColor: _isListening ? Colors.red : Colors.deepOrange,
-      child: Icon(
-        _isListening ? Icons.mic : Icons.mic_none,
-        color: Colors.white,
-      ),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        GestureDetector(
+          onTap: _toggleListening,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 300),
+            padding: EdgeInsets.all(_isListening ? 16 : 12),
+            decoration: BoxDecoration(
+              color: _isListening ? Colors.redAccent : Colors.transparent,
+              shape: BoxShape.circle,
+              boxShadow: _isListening
+                  ? [BoxShadow(color: Colors.red.withOpacity(0.5), blurRadius: 15, spreadRadius: 5)]
+                  : [],
+            ),
+            child: Icon(
+              _isListening ? Icons.mic : Icons.mic_none,
+              color: _isListening ? Colors.white : Colors.blue,
+              size: 28,
+            ),
+          ),
+        ),
+        if (_isListening)
+          Padding(
+            padding: const EdgeInsets.only(top: 8.0),
+            child: Text(
+              _currentText.isEmpty ? 'Đang nghe...' : _currentText,
+              style: const TextStyle(color: Colors.grey, fontStyle: FontStyle.italic),
+              textAlign: TextAlign.center,
+            ),
+          ),
+      ],
     );
   }
 }

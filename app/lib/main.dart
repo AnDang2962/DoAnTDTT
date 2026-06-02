@@ -11,6 +11,7 @@ import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 
 import 'firebase_options.dart';
 import 'package:route_mate_app/features/main_shell/main_shell_screen.dart';
+import 'package:route_mate_app/core/services/solo_room_service.dart';
 
 
 /// =========================================================
@@ -24,7 +25,7 @@ import 'package:route_mate_app/features/main_shell/main_shell_screen.dart';
 ///   - Release + emulator (cho demo 2 máy thật):
 ///     $ flutter run --release \
 ///         --dart-define=USE_EMULATOR=true \
-///         --dart-define=MAC_LAN_IP=172.16.71.145
+///         --dart-define=MAC_LAN_IP=192.168.1.3
 ///
 ///   - Production (sau này khi deploy backend):
 ///     $ flutter run --release
@@ -34,7 +35,7 @@ import 'package:route_mate_app/features/main_shell/main_shell_screen.dart';
 const bool _useEmulator =
     bool.fromEnvironment('USE_EMULATOR', defaultValue: kDebugMode);
 const String _macLanIp =
-    String.fromEnvironment('MAC_LAN_IP', defaultValue: '172.16.71.145');
+    String.fromEnvironment('MAC_LAN_IP', defaultValue: '192.168.1.3');
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -102,6 +103,9 @@ Future<void> main() async {
   } catch (e) {
     debugPrint('⚠ Sign-in failed: $e');
   }
+
+  // === 5. Tạo solo room cho tab Tìm đường ===
+  await SoloRoomService.ensureSoloRoom();
 
   runApp(const MyApp());
 }

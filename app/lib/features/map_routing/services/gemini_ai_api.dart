@@ -1,14 +1,16 @@
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/foundation.dart';
-import 'package:route_mate_app/core/firebase_functions_helper.dart';
+import 'package:route_mate_app/core/services/firebase_functions_helper.dart';
 
 /// Gọi Cloud Function `voiceCommand` của backend M5.
 ///
-/// Backend trả về schema (Gemini Function Calling, 6 actions):
-///   { action, params, responseText, latencyMs }
+/// Backend trả về schema thống nhất:
+///   { type: 'command'|'risk', data: {...}, latencyMs }
 class GeminiAiApi {
-  /// Phân tích voice command.
-  /// Trả về Map flatten để tương thích code caller cũ.
+  /// Phân tích voice command, tự động phân loại command vs risk.
+  ///
+  /// Kết quả luôn có: type, action, responseText.
+  /// Nếu type='risk' thêm: vi, category, subtype, autoSaved, riskId.
   static Future<Map<String, dynamic>?> analyzeCommand(
     String spokenText, {
     String? roomId,
@@ -16,34 +18,56 @@ class GeminiAiApi {
     double? currentLng,
   }) async {
     try {
-      final result = await backendFunctions.httpsCallable('voiceCommand').call({
-        'text': spokenText,
-      });
+      final callData = <String, dynamic>{'text': spokenText};
+      if (roomId != null) callData['roomId'] = roomId;
+      if (currentLat != null) callData['lat'] = currentLat;
+      if (currentLng != null) callData['lng'] = currentLng;
 
-      // Safe parse — backend trả Map nhưng nested có thể là String/null
+      final result =
+          await backendFunctions.httpsCallable('voiceCommand').call(callData);
+
       final raw = Map<String, dynamic>.from(result.data as Map);
+      final type = raw['type']?.toString() ?? 'command';
+      final dataMap = raw['data'] is Map
+          ? Map<String, dynamic>.from(raw['data'] as Map)
+          : <String, dynamic>{};
 
-      final action = raw['action']?.toString() ?? 'unknown';
-      final responseText = raw['responseText']?.toString() ?? '';
-
-      // params có thể null, String, hoặc Map
-      Map<String, dynamic> params = {};
-      final rawParams = raw['params'];
-      if (rawParams is Map) {
-        params = Map<String, dynamic>.from(rawParams);
+      if (type == 'risk') {
+        final vi = dataMap['vi']?.toString() ?? '';
+        final responseText = dataMap['responseText']?.toString() ?? '';
+        final autoSaved = dataMap['autoSaved'] == true;
+        debugPrint(
+          '[GeminiAiApi] Risk: ${dataMap['category']}/${dataMap['subtype']} autoSaved=$autoSaved',
+        );
+        return {
+          'type': type,
+          'action': 'report_risk',
+          'responseText': responseText,
+          'response': responseText,
+          'vi': vi,
+          'category': dataMap['category']?.toString() ?? '',
+          'subtype': dataMap['subtype']?.toString() ?? '',
+          'autoSaved': autoSaved,
+          'riskId': dataMap['id']?.toString(),
+        };
       }
+
+      // type == 'command'
+      final action = dataMap['action']?.toString() ?? 'unknown';
+      final responseText = dataMap['responseText']?.toString() ?? '';
+      final params = dataMap['params'] is Map
+          ? Map<String, dynamic>.from(dataMap['params'] as Map)
+          : <String, dynamic>{};
 
       debugPrint('[GeminiAiApi] Action: $action | Response: $responseText');
 
-      // Return Map flatten — code cũ dùng aiResult['destination'], aiResult['intent']
-      // Map action backend → key cũ frontend đang dùng
       return {
+        'type': type,
         'action': action,
-        'intent': action, // Alias để tương thích code cũ
+        'intent': action,
         'response': responseText,
         'responseText': responseText,
         'params': params,
-        // Convenience fields cho từng action
         'destination': params['destination_name']?.toString() ??
             params['place']?.toString(),
         'destinationName': params['destination_name']?.toString(),
@@ -51,7 +75,7 @@ class GeminiAiApi {
         'radiusKm': params['radius_km'],
         'reason': params['reason']?.toString(),
         'originalText': params['original_text']?.toString(),
-        'risks': params['risks'], // Cho code line 100
+        'risks': params['risks'],
       };
     } on FirebaseFunctionsException catch (e) {
       debugPrint('[GeminiAiApi] Lỗi gọi AI Backend: ${e.code} - ${e.message}');

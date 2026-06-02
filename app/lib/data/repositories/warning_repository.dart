@@ -3,58 +3,34 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/foundation.dart';
 import '../models/warning_marker.dart';
 
-/// Quản lý dữ liệu về Các Rủi Ro/Cảnh báo trên đường và Tích hợp AI Giọng nói
+/// Quản lý dữ liệu cảnh báo nguy hiểm trên đường.
 class WarningRepository {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  // Trỏ thẳng đến khu vực chứa Cloud Function (asia-southeast1 để giảm độ trễ)
   final FirebaseFunctions _functions = FirebaseFunctions.instanceFor(region: 'asia-southeast1');
 
-  /// GỬI GIỌNG NÓI CHO AI PHÂN TÍCH (Sử dụng Cloud Function gọi Gemini)
-  /// Người dùng chỉ cần bấm nút thu âm và nói (VD: "Có ổ gà bự chà bá phía trước").
-  /// Backend sẽ gọi Gemini 2.5 Flash để dịch câu nói đó thành tọa độ và Icon hiển thị.
-  Future<Map<String, dynamic>?> parseRiskFromVoice({
-    required String roomId,
-    required String voiceText,
-    required double lat,
-    required double lng,
-  }) async {
-    try {
-      final result = await _functions
-          .httpsCallable('parseRiskFromVoice')
-          .call<Map<String, dynamic>>({
-        'roomId': roomId,
-        'voiceText': voiceText,
-        'lat': lat,
-        'lng': lng,
-      });
-      
-      final data = Map<String, dynamic>.from(result.data);
-      debugPrint('[WarningRepository] AI Trả về: Loại=${data['category']} / Độ tin cậy=${data['confidence']} / Tự động lưu=${data['autoSaved']}');
-      return data;
-    } on FirebaseFunctionsException catch (e) {
-      debugPrint('[WarningRepository] Lỗi Backend khi gọi AI: ${e.code} - ${e.message}');
-      return null;
-    } catch (e) {
-      debugPrint('[WarningRepository] Lỗi mạng/hệ thống khi gọi AI: $e');
-      return null;
-    }
-  }
-
-  /// LẤY CÁC CẢNH BÁO XUNG QUANH LỘ TRÌNH (Backend tính toán sẵn)
-  /// Không cần tải toàn bộ cảnh báo trên mạng, Backend chỉ trả về những điểm nằm cách lộ trình tối đa 3km.
+  /// LẤY CÁC CẢNH BÁO XUNG QUANH LỘ TRÌNH (tất cả nhóm — cross-group)
+  ///
+  /// Backend query theo vùng địa lý (polyline bounding box), không lọc theo roomId.
+  /// Truyền [polyline] trực tiếp hoặc [roomId] (backend tự lấy route từ Firestore).
   Future<List<WarningMarker>> getRiskLabelsNearRoute({
-    required String roomId,
+    String? roomId,
+    List<Map<String, double>>? polyline,
     double bufferKm = 3.0,
     double minSeverity = 0.1,
   }) async {
+    assert(roomId != null || polyline != null,
+        'Phải truyền roomId hoặc polyline');
     try {
-      final result = await _functions
-          .httpsCallable('getRiskLabelsNearRoute')
-          .call<Map<String, dynamic>>({
-        'roomId': roomId,
+      final callData = <String, dynamic>{
         'bufferKm': bufferKm,
         'minSeverity': minSeverity,
-      });
+      };
+      if (roomId != null) callData['roomId'] = roomId;
+      if (polyline != null) callData['polyline'] = polyline;
+
+      final result = await _functions
+          .httpsCallable('getRiskLabelsNearRoute')
+          .call<Map<String, dynamic>>(callData);
       
       final risksJson = (result.data['risks'] as List?) ?? [];
       final List<WarningMarker> warnings = [];

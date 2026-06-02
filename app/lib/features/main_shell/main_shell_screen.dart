@@ -4,19 +4,12 @@ import 'package:provider/provider.dart';
 import 'package:route_mate_app/features/main_map/main_map_screen.dart';
 import 'package:route_mate_app/features/main_map/providers/map_state_provider.dart';
 import 'package:route_mate_app/features/group_radar/screens/room_lobby_screen.dart';
-
-// 🔥 QUAN TRỌNG: Import thêm UI của M2 vào đây
 import 'package:route_mate_app/features/map_routing/screens/routing_panel.dart';
-
-// 1. IMPORT MÀN HÌNH LOBBY CỦA BẠN VÀO ĐÂY
 import 'package:route_mate_app/features/sos_emergency/screens/sos_screen.dart';
-// 🔥 THÊM 3 DÒNG NÀY ĐỂ FIX 3 LỖI ĐỎ TRONG ẢNH 🔥
 import 'package:route_mate_app/features/group_radar/presentation/providers/members_provider.dart';
 import 'package:route_mate_app/data/repositories/group_repository.dart';
 import 'package:route_mate_app/core/services/location_service.dart';
 
-// 🔥 THÊM THƯ VIỆN ĐỂ LẮNG NGHE THÔNG BÁO 🔥
-// 🔥 CÁC THƯ VIỆN MỚI THÊM CHO TÍNH NĂNG NHẬN CẢNH BÁO SOS
 import 'package:firebase_messaging/firebase_messaging.dart';
 import '../sos_emergency/widgets/sos_map_overlay.dart' show SOSMapOverlay;
 
@@ -30,26 +23,19 @@ class MainShellScreen extends StatefulWidget {
 class _MainShellScreenState extends State<MainShellScreen> {
   int _currentIndex = 0;
 
-  // CÁC TAB BÂY GIỜ CHỈ LÀ GIAO DIỆN TRONG SUỐT (Không chứa bản đồ)
   final List<Widget> _screens = [
-    const SafeArea(child: RoutingPanel()), // Tab 0: Lớp UI Tìm đường của M2
-    const RoomLobbyScreen(), // Tab 1: Lớp UI Radar của M3
+    const SafeArea(child: RoutingPanel()),
+    const RoomLobbyScreen(),
     const SafeArea(child: SosScreen()),
   ];
 
-  // 🔥 BẮT ĐẦU ĐOẠN CODE THÊM MỚI: ĐÓN THÔNG BÁO KHI ĐANG MỞ APP 🔥
   @override
   void initState() {
     super.initState();
-    
-    // 1. Xin quyền hiển thị thông báo (Cần thiết cho Android 13+)
+
     FirebaseMessaging.instance.requestPermission();
 
-    // 2. Lắng nghe thông báo khi App đang mở (Foreground)
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-      debugPrint('🚨 Bắt được sóng SOS khi đang mở app!');
-      
-      // Bóc tách dữ liệu từ payload của tin nhắn
       final data = message.data;
       final double? lat = double.tryParse(data['lat']?.toString() ?? '');
       final double? lng = double.tryParse(data['lng']?.toString() ?? '');
@@ -58,7 +44,7 @@ class _MainShellScreenState extends State<MainShellScreen> {
       if (mounted) {
         showDialog(
           context: context,
-          barrierDismissible: false, // Ép người dùng phải tương tác
+          barrierDismissible: false,
           builder: (dialogContext) => AlertDialog(
             backgroundColor: Colors.red.shade50,
             title: const Row(
@@ -78,7 +64,7 @@ class _MainShellScreenState extends State<MainShellScreen> {
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  '🔋 Tình trạng pin nạn nhân: $battery%', 
+                  'Pin nạn nhân: $battery%',
                   style: TextStyle(color: Colors.red.shade700, fontWeight: FontWeight.w600),
                 ),
               ],
@@ -88,15 +74,11 @@ class _MainShellScreenState extends State<MainShellScreen> {
                 onPressed: () => Navigator.of(dialogContext).pop(),
                 child: const Text('BỎ QUA', style: TextStyle(color: Colors.grey)),
               ),
-              // Chỉ hiện nút tới cứu nếu có tọa độ hợp lệ
               if (lat != null && lng != null)
                 ElevatedButton.icon(
                   style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
                   onPressed: () {
-                    // Đóng hộp thoại
-                    Navigator.of(dialogContext).pop(); 
-                    
-                    // Mở bản đồ dẫn đường
+                    Navigator.of(dialogContext).pop();
                     Navigator.push(
                       context,
                       MaterialPageRoute(
@@ -116,11 +98,9 @@ class _MainShellScreenState extends State<MainShellScreen> {
       }
     });
   }
-  // 🔥 KẾT THÚC ĐOẠN CODE THÊM MỚI 🔥
 
   @override
   Widget build(BuildContext context) {
-    // 🔥 SỬA THÀNH MULTIPROVIDER Ở ĐÂY 🔥
     return MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (context) => MapStateProvider()),
@@ -134,17 +114,23 @@ class _MainShellScreenState extends State<MainShellScreen> {
       child: Scaffold(
         body: Stack(
           children: [
-            // 1. LỚP NỀN DƯỚI CÙNG: Bản đồ duy nhất chạy 24/24
             const MainMapScreen(),
-
-            // 2. LỚP KÍNH TRÊN CÙNG: Các Tab giao diện đè lên bản đồ
-            IndexedStack(index: _currentIndex, children: _screens),
+            ...List.generate(_screens.length, (i) => AnimatedOpacity(
+              opacity: i == _currentIndex ? 1.0 : 0.0,
+              duration: const Duration(milliseconds: 150),
+              child: IgnorePointer(
+                ignoring: i != _currentIndex,
+                child: _screens[i],
+              ),
+            )),
           ],
         ),
         bottomNavigationBar: NavigationBar(
           selectedIndex: _currentIndex,
           onDestinationSelected: (index) =>
               setState(() => _currentIndex = index),
+          backgroundColor: Colors.white,
+          indicatorColor: Colors.blue.withValues(alpha: 0.12),
           destinations: const [
             NavigationDestination(
               icon: Icon(Icons.map_outlined),

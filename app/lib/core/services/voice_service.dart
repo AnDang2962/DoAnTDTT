@@ -47,7 +47,11 @@ class VoiceService {
 
   /// Bắt đầu lắng nghe và tự động nhận diện ngôn ngữ Tiếng Việt (vi_VN)
   /// Sẽ tự động ngắt sau 10 giây hoặc khi im lặng 3 giây.
-  Future<void> startListening({required Function(String) onResult}) async {
+  /// [onPartialResult] nếu được truyền vào, sẽ được gọi liên tục khi có chữ mới.
+  Future<void> startListening({
+    required Function(String) onResult,
+    Function(String)? onPartialResult,
+  }) async {
     if (!_isInitialized) return;
     if (_isListening) return;
 
@@ -57,13 +61,15 @@ class VoiceService {
         listenFor: const Duration(seconds: 10),
         pauseFor: const Duration(seconds: 3),
         listenOptions: stt.SpeechListenOptions(
-          partialResults: false, // Chỉ lấy kết quả cuối cùng (tránh nhảy chữ liên tục)
+          partialResults: onPartialResult != null,
           cancelOnError: true,
         ),
         onResult: (result) {
           if (result.finalResult && result.recognizedWords.isNotEmpty) {
             debugPrint('[VoiceService] Nghe được: "${result.recognizedWords}"');
             onResult(result.recognizedWords);
+          } else if (!result.finalResult && onPartialResult != null) {
+            onPartialResult(result.recognizedWords);
           }
         },
       );

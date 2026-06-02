@@ -31,6 +31,23 @@ class RouteUtils {
     return [];
   }
 
+  /// Giảm số điểm polyline xuống tối đa [maxPoints] bằng cách lấy đều.
+  /// Dùng trước khi gửi lên backend (giới hạn 5000 điểm).
+  static List<Map<String, double>> downsamplePolyline(
+    List<Map<String, double>> points, {
+    int maxPoints = 500,
+  }) {
+    if (points.length <= maxPoints) return points;
+    final step = points.length / maxPoints;
+    final result = <Map<String, double>>[];
+    for (int i = 0; i < maxPoints; i++) {
+      result.add(points[(i * step).floor()]);
+    }
+    // Luôn giữ điểm cuối
+    if (result.last != points.last) result.add(points.last);
+    return result;
+  }
+
   /// Trích xuất các điểm kiểm tra thời tiết dọc theo lộ trình.
   /// Thuật toán: Đi dọc theo lộ trình, cứ cộng dồn đủ 50km thì lấy ra 1 điểm để check thời tiết.
   static List<mapbox.Position> extractWaypointsEvery50Km(List<mapbox.Position> coords) {

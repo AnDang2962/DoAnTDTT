@@ -28,16 +28,21 @@ dependencies:
   
   # --- 3. BẢN ĐỒ & ĐỊNH VỊ GPS ---
   mapbox_maps_flutter: ^2.23.1 # Giữ thế độc tôn của Mapbox (Loại bỏ Google Maps của M4)
-  flutter_map: ^6.1.0          
-  latlong2: ^0.9.1             
+  flutter_map: ^6.1.0
+  latlong2: ^0.9.1
   geolocator: ^12.0.0          # Giữ bản 12.0.0 để không bị xung đột
+  flutter_compass: ^0.8.1      # Compass từ kế — xoay map theo hướng điện thoại
   
   # --- 4. TÍNH NĂNG SOS (Thêm từ M4) ---
   battery_plus: ^6.0.2         # Check pin (hạ version để fix lỗi js conflict)
   connectivity_plus: ^6.1.0    # Check mạng (Online/Offline)
   url_launcher: ^6.3.1         # Mở SMS Fallback
   
-  # --- 5. GIAO DIỆN ---
+  # --- 5. TIỆN ÍCH ---
+  crypto: ^3.0.6               # SHA-256 hash để tạo solo room ID
+  flutter_tts: ^4.2.0          # Text-to-Speech cho voice response
+
+  # --- 6. GIAO DIỆN ---
   cupertino_icons: ^1.0.8
 
 dev_dependencies:

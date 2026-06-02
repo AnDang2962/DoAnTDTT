@@ -3,7 +3,7 @@ import 'package:firebase_database/firebase_database.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/foundation.dart';
 import '../models/user_model.dart';
-import 'package:route_mate_app/services/firebase_functions_helper.dart';
+import 'package:route_mate_app/core/services/firebase_functions_helper.dart';
 
 /// Quản lý dữ liệu Phòng Phượt (Room) — KIẾN TRÚC BACKEND-DRIVEN
 ///

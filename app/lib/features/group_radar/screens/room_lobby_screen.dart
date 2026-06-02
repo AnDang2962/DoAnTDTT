@@ -4,13 +4,12 @@ import '../../../data/models/user_model.dart';
 import '../../../data/repositories/room_repository.dart';
 import 'group_radar_overlay.dart';
 
-// 🔥 M4 import thư viện này để đồng bộ mã phòng
 import 'package:provider/provider.dart';
 import '../presentation/providers/members_provider.dart';
+import '../../main_map/providers/map_state_provider.dart';
 
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-// 🔥 ============================================================ 🔥
 
 /// Group Radar Lobby — màn hình tạo/vào phòng nhóm.
 ///
@@ -20,7 +19,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 ///   3. Sau khi thành công, switch UI sang GroupRadarOverlay
 ///      (KHÔNG Navigator.push để giữ Provider scope của MainShellScreen)
 class RoomLobbyScreen extends StatefulWidget {
-  const RoomLobbyScreen({Key? key}) : super(key: key);
+  const RoomLobbyScreen({super.key});
 
   @override
   State<RoomLobbyScreen> createState() => _RoomLobbyScreenState();
@@ -35,7 +34,6 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
   String _selectedRole = 'leader';
   bool _isLoading = false;
 
-  // === State để switch sang GroupRadarOverlay ===
   String? _activeRoomId;
   UserModel? _activeUser;
 
@@ -86,25 +84,24 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
     });
   }
 
-  /// Khi user rời phòng, quay lại lobby form
   void _onLeaveRoom() async {
     if (_activeRoomId == null) return;
 
     final wasLeader = _activeUser?.role == UserRole.leader;
 
-    // Member: gọi backend leaveRoom
     if (!wasLeader) {
       await _roomRepo.leaveRoom(_activeRoomId!);
     }
 
     if (!mounted) return;
+    context.read<MapStateProvider>().clearAll();
+    context.read<MembersProvider>().updateRoomIdForSOS('');
     setState(() {
       _activeRoomId = null;
       _activeUser = null;
     });
   }
 
-  /// Xử lý logic Tạo phòng hoặc Vào phòng
   Future<void> _handleAction() async {
     if (_isLoading) return;
 
@@ -138,7 +135,7 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
           _showError('Tạo phòng từ Backend thất bại! Kiểm tra Emulator.');
           return;
         }
-        _showSuccess('✓ Đã tạo phòng: $roomId');
+        _showSuccess('Đã tạo phòng: $roomId');
       } else {
         final inputRoomId = _roomIdController.text.trim().toUpperCase();
         if (inputRoomId.isEmpty) {
@@ -153,10 +150,9 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
           return;
         }
         roomId = inputRoomId;
-        _showSuccess('✓ Đã vào phòng: $roomId');
+        _showSuccess('Đã vào phòng: $roomId');
       }
 
-      // 🔥 BẮT ĐẦU ĐOẠN CODE THÊM MỚI CỦA M4: Lấy và lưu FCM Token cho Backend 🔥
       if (roomId != null) {
         try {
           String? token = await FirebaseMessaging.instance.getToken();
@@ -166,19 +162,18 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
                 .doc(roomId)
                 .set({
                   'fcmTokens': {
-                    auth.currentUser!.uid: token, // Cập nhật đúng cấu trúc Map mà sos.js cần
+                    auth.currentUser!.uid: token,
                   }
                 }, SetOptions(merge: true));
-            debugPrint("✅ Đã cập nhật FCM Token lên Firebase: $token");
           }
         } catch (e) {
-          debugPrint("⚠ Lỗi cập nhật token: $e");
+          debugPrint('Lỗi cập nhật FCM token: $e');
         }
       }
-      // 🔥 KẾT THÚC ĐOẠN CODE THÊM MỚI 🔥
 
-      // Switch UI sang GroupRadarOverlay (cùng context, giữ Provider scope)
       if (!mounted) return;
+      context.read<MapStateProvider>().clearAll();
+      context.read<MembersProvider>().updateRoomIdForSOS(roomId!);
       setState(() {
         _activeRoomId = roomId;
         _activeUser = user;
@@ -192,17 +187,6 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Đoạn callback này tự động bắn mã phòng lên Provider khi tạo/vào phòng thành công.
-      // Dùng addPostFrameCallback để không gây lỗi build UI của M3.
-      // Toàn bộ logic giao diện bên dưới của M3 được giữ nguyên 100%!
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          Provider.of<MembersProvider>(context, listen: false)
-              .updateRoomIdForSOS(_activeRoomId!);
-        }
-      });
-      // 🔥 ======================================================= 🔥
-    // Đã vào phòng → hiện GroupRadarOverlay (cùng Provider scope với MainShellScreen)
     if (_activeRoomId != null && _activeUser != null) {
       return GroupRadarOverlay(
         roomId: _activeRoomId!,
@@ -211,36 +195,33 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
       );
     }
 
-    // Chưa vào phòng → hiện lobby form
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
-        title: const Text('Group Radar Lobby'),
-        backgroundColor: Colors.white.withOpacity(0.95),
+        title: const Text('Đội nhóm'),
+        backgroundColor: Colors.white,
+        elevation: 0,
+        scrolledUnderElevation: 0,
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                ChoiceChip(
-                  label: const Text('Tạo phòng'),
-                  selected: _isCreatingRoom,
-                  onSelected: (val) {
-                    if (val) _switchMode(true);
-                  },
+            SegmentedButton<bool>(
+              segments: const [
+                ButtonSegment(
+                  value: true,
+                  label: Text('Tạo phòng'),
+                  icon: Icon(Icons.add_circle_outline),
                 ),
-                const SizedBox(width: 16),
-                ChoiceChip(
-                  label: const Text('Vào phòng'),
-                  selected: !_isCreatingRoom,
-                  onSelected: (val) {
-                    if (val) _switchMode(false);
-                  },
+                ButtonSegment(
+                  value: false,
+                  label: Text('Vào phòng'),
+                  icon: Icon(Icons.login),
                 ),
               ],
+              selected: {_isCreatingRoom},
+              onSelectionChanged: (val) => _switchMode(val.first),
             ),
             const SizedBox(height: 24),
             TextField(

@@ -22,6 +22,8 @@ import { makeLogger } from './lib/logger';
 import { enforceRateLimit } from './lib/rateLimit';
 import { requireString, requireLatLng } from './lib/validate';
 import { GEMINI_API_KEY, generateWithRetry } from './lib/gemini';
+import { RISK_TAXONOMY, findSubtypeConfig } from './lib/riskTaxonomy';
+import { saveRiskLabel, assertLeader } from './riskLabels';
 
 // ============================================================
 // 5a. Voice Command (Function Calling)
@@ -95,6 +97,40 @@ const VOICE_ACTION_DECLARATIONS: FunctionDeclaration[] = [
     parameters: { type: Type.OBJECT, properties: {} },
   },
   {
+    name: 'report_risk',
+    description:
+      'Báo cáo nguy hiểm/sự cố trên đường. Dùng khi user đề cập: ổ gà, ngập nước, trơn, sương mù, tai nạn, tắc đường, chốt CSGT, sạt lở, cây đổ, v.v.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        category: {
+          type: Type.STRING,
+          enum: Object.keys(RISK_TAXONOMY),
+          description:
+            'WEATHER=thời tiết, ACCIDENT=tai nạn/tắc, ROAD_BAD=đường xấu, POLICE=chốt CSGT, HAZARD_OTHER=nguy hiểm khác',
+        },
+        subtype: {
+          type: Type.STRING,
+          description:
+            'WEATHER: heavy_rain|fog|strong_wind|flooding | ACCIDENT: accident|traffic_jam|breakdown | ROAD_BAD: pothole|slippery|gravel|construction | POLICE: checkpoint|speed_camera|mobile_patrol | HAZARD_OTHER: landslide|fallen_tree|animal|dark_road',
+        },
+        confidence: {
+          type: Type.NUMBER,
+          description: 'Độ tự tin 0-1. ≥ 0.8 = auto-save, < 0.8 = preview chờ confirm',
+        },
+        autoSave: {
+          type: Type.BOOLEAN,
+          description: 'true nếu confidence cao + câu nói rõ ràng, false nếu mơ hồ cần confirm',
+        },
+        reason: {
+          type: Type.STRING,
+          description: 'Giải thích ngắn (max 80 ký tự) tại sao chọn subtype này',
+        },
+      },
+      required: ['category', 'subtype', 'confidence', 'autoSave', 'reason'],
+    },
+  },
+  {
     name: 'unknown',
     description:
       'Khi không hiểu rõ ý user hoặc câu nói không liên quan đến các action trên.',
@@ -110,17 +146,34 @@ const VOICE_ACTION_DECLARATIONS: FunctionDeclaration[] = [
   },
 ];
 
-interface VoiceCommandResult {
+interface CommandData {
   action: string;
   params: Record<string, unknown>;
   /** Câu trả lời tự nhiên hiển thị cho user (TTS sẽ đọc câu này). */
   responseText: string;
+}
+
+interface RiskData {
+  category: string;
+  subtype: string;
+  vi: string;
+  confidence: number;
+  autoSaved: boolean;
+  reason: string;
+  responseText: string;
+  id?: string;
+  severity?: number;
+}
+
+interface VoiceCommandResult {
+  type: 'command' | 'risk';
+  data: CommandData | RiskData;
   /** Latency Gemini call (ms) — để monitor. */
   latencyMs: number;
 }
 
 export const voiceCommand = onCall<
-  { text: string },
+  { text: string; roomId?: string; lat?: number; lng?: number },
   Promise<VoiceCommandResult>
 >(
   {
@@ -139,6 +192,21 @@ export const voiceCommand = onCall<
       maxLen: 500,
     });
 
+    // Optional context cho risk reporting (solo hoặc group room)
+    const roomId =
+      typeof request.data?.roomId === 'string' &&
+      /^[A-HJ-NP-Z2-9]{6}$/.test(request.data.roomId)
+        ? request.data.roomId
+        : null;
+    const lat =
+      typeof request.data?.lat === 'number' && isFinite(request.data.lat)
+        ? request.data.lat
+        : null;
+    const lng =
+      typeof request.data?.lng === 'number' && isFinite(request.data.lng)
+        ? request.data.lng
+        : null;
+
     // Rate limit: 30 req/phút (chống burst — nhưng vẫn đủ cho conversation tự nhiên)
     await enforceRateLimit({
       name: 'voice',
@@ -147,14 +215,19 @@ export const voiceCommand = onCall<
       windowSec: 60,
     });
 
-    log.info('voice_received', { text_len: text.length });
+    log.info('voice_received', { text_len: text.length, has_room: roomId !== null });
 
     const systemPrompt = [
-      'Bạn là trợ lý ảo trên ứng dụng RouteMate dành cho nhóm đi du lịch xe máy/ô tô tại Việt Nam.',
-      'Khi user nói/gõ một câu, hãy phân tích ý định và GỌI ĐÚNG MỘT function trong danh sách.',
-      'Sau khi chọn function, trả về câu xác nhận tự nhiên bằng tiếng Việt (1-2 câu, không vượt 50 từ).',
-      'Câu xác nhận sẽ được đọc cho user nghe, nên dùng giọng văn thân thiện như đang nói chuyện.',
-    ].join(' ');
+      'Bạn là trợ lý RouteMate cho nhóm phượt xe máy Việt Nam.',
+      'Phân tích ý định user → GỌI ĐÚNG MỘT function. Sau khi gọi, viết xác nhận ngắn tiếng Việt (1-2 câu, ≤50 từ).',
+      '',
+      'Dùng report_risk khi user đề cập sự cố/nguy hiểm trên đường:',
+      'WEATHER: mưa to→heavy_rain, sương mù→fog, gió mạnh→strong_wind, ngập→flooding',
+      'ACCIDENT: tai nạn→accident, tắc đường→traffic_jam, xe hỏng→breakdown',
+      'ROAD_BAD: ổ gà→pothole, trơn→slippery, sỏi đá→gravel, thi công→construction',
+      'POLICE: chốt CSGT→checkpoint, camera tốc độ→speed_camera, tuần tra→mobile_patrol',
+      'HAZARD_OTHER: sạt lở→landslide, cây đổ→fallen_tree, động vật→animal, đường tối→dark_road',
+    ].join('\n');
 
     const geminiStart = Date.now();
     let response;
@@ -191,24 +264,112 @@ export const voiceCommand = onCall<
     if (!fnCall || !fnCall.name) {
       log.warn('voice_no_function_call', { text });
       return {
-        action: 'unknown',
-        params: { original_text: text },
-        responseText: 'Xin lỗi, tôi chưa hiểu ý bạn. Bạn có thể nói lại được không?',
+        type: 'command',
+        data: {
+          action: 'unknown',
+          params: { original_text: text },
+          responseText: 'Xin lỗi, tôi chưa hiểu ý bạn. Bạn có thể nói lại được không?',
+        },
         latencyMs: geminiMs,
       };
     }
 
+    // --- Xử lý riêng report_risk ---
+    if (fnCall.name === 'report_risk') {
+      const riskArgs = (fnCall.args ?? {}) as {
+        category?: string;
+        subtype?: string;
+        confidence?: number;
+        autoSave?: boolean;
+        reason?: string;
+      };
+      const found = findSubtypeConfig(riskArgs.category ?? '', riskArgs.subtype ?? '');
+
+      if (!found) {
+        return {
+          type: 'command',
+          data: {
+            action: 'unknown',
+            params: {},
+            responseText: 'Không xác định được loại sự cố. Vui lòng dùng nút cảnh báo để chọn thủ công.',
+          },
+          latencyMs: geminiMs,
+        };
+      }
+
+      const confidence = Math.max(0, Math.min(1, typeof riskArgs.confidence === 'number' ? riskArgs.confidence : 0.5));
+      const shouldAutoSave = riskArgs.autoSave === true && confidence >= 0.8;
+      const reason = (riskArgs.reason ?? '').slice(0, 100);
+
+      let riskId: string | undefined;
+      let severity: number | undefined;
+      let autoSaved = false;
+
+      if (shouldAutoSave && roomId !== null && lat !== null && lng !== null) {
+        try {
+          await assertLeader(auth.uid, roomId, log);
+          const saved = await saveRiskLabel({
+            category: found.category,
+            subtype: found.config.subtype,
+            lat,
+            lng,
+            reportedBy: auth.uid,
+            reportedRoomId: roomId,
+            source: 'voice',
+            voiceRawText: text,
+          });
+          riskId = saved.id;
+          severity = saved.severity;
+          autoSaved = true;
+        } catch {
+          autoSaved = false;
+        }
+      }
+
+      const riskResponse = autoSaved
+        ? `Đã ghi nhận: ${found.config.vi} tại vị trí này.`
+        : `Phát hiện: ${found.config.vi}. Chưa lưu — ${confidence < 0.8 ? 'độ tin cậy thấp' : 'thiếu vị trí hoặc quyền leader'}.`;
+
+      log.duration('voice_risk_reported', startMs, {
+        category: found.category,
+        subtype: found.config.subtype,
+        confidence,
+        auto_saved: autoSaved,
+        gemini_ms: geminiMs,
+      });
+
+      return {
+        type: 'risk',
+        data: {
+          category: found.category,
+          subtype: found.config.subtype,
+          vi: found.config.vi,
+          confidence,
+          autoSaved,
+          reason,
+          responseText: riskResponse,
+          id: riskId,
+          severity,
+        },
+        latencyMs: geminiMs,
+      };
+    }
+
+    // --- Xử lý command thông thường ---
     const result: VoiceCommandResult = {
-      action: fnCall.name,
-      params: (fnCall.args as Record<string, unknown>) ?? {},
-      responseText:
-        textPart.trim() ||
-        defaultResponseFor(fnCall.name, fnCall.args as Record<string, unknown>),
+      type: 'command',
+      data: {
+        action: fnCall.name,
+        params: (fnCall.args as Record<string, unknown>) ?? {},
+        responseText:
+          textPart.trim() ||
+          defaultResponseFor(fnCall.name, fnCall.args as Record<string, unknown>),
+      },
       latencyMs: geminiMs,
     };
 
     log.duration('voice_completed', startMs, {
-      action: result.action,
+      action: fnCall.name,
       gemini_ms: geminiMs,
     });
     return result;
@@ -246,6 +407,8 @@ function defaultResponseFor(
       return 'Đang kiểm tra vị trí cả nhóm.';
     case 'recommend_rest':
       return 'Đang phân tích mức độ mệt mỏi của bạn.';
+    case 'report_risk':
+      return 'Đã ghi nhận sự cố trên đường.';
     default:
       return 'Đã nhận yêu cầu của bạn.';
   }

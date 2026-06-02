@@ -49,7 +49,7 @@ import {
 // ============================================================
 // Helper: assert caller là leader của room
 // ============================================================
-async function assertLeader(
+export async function assertLeader(
   uid: string,
   roomId: string,
   log: ReturnType<typeof makeLogger>
@@ -72,7 +72,7 @@ async function assertLeader(
 // ============================================================
 // Helper: save 1 risk label vào Firestore
 // ============================================================
-async function saveRiskLabel(params: {
+export async function saveRiskLabel(params: {
   category: RiskCategory;
   subtype: string;
   lat: number;
