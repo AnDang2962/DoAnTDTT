@@ -43,11 +43,10 @@ class _RoutingPanelState extends State<RoutingPanel> {
   Timer? _riskRefreshTimer;
   StreamSubscription<Position>? _navGpsSub;
 
-  // Hai nguồn risk riêng biệt — gộp trước khi vẽ để không ghi đè nhau
   List<WarningMarker> _realtimeRisks = [];
   List<WarningMarker> _crossGroupRisks = [];
+  List<Map<String, double>> _polylineData = [];
 
-  /// Gộp 2 nguồn risk (dedup theo id) và vẽ 1 lần duy nhất.
   void _redrawAllRisks() {
     if (!mounted) return;
     final mapProvider = context.read<MapStateProvider>();
@@ -99,7 +98,6 @@ class _RoutingPanelState extends State<RoutingPanel> {
     });
   }
 
-  /// Refresh cross-group risks định kỳ 5 phút khi đang điều hướng.
   void _startCrossGroupRiskTimer(List<Map<String, double>> polylineData) {
     _riskRefreshTimer?.cancel();
     _riskRefreshTimer = Timer.periodic(const Duration(minutes: 5), (_) async {
@@ -130,6 +128,9 @@ class _RoutingPanelState extends State<RoutingPanel> {
       if (mapProvider.isFollowing) {
         mapProvider.easeTo(_myLastPos!, bearing: pos.heading >= 0 ? pos.heading : null);
       }
+      if (mapProvider.isNavigating) {
+        unawaited(mapProvider.setNavArrow(_myLastPos!));
+      }
     });
   }
 
@@ -147,9 +148,27 @@ class _RoutingPanelState extends State<RoutingPanel> {
   }
 
   Future<void> _handleDestinationSelected(mapbox.Position destPos, String placeName) async {
-    FocusScope.of(context).unfocus(); 
-    setState(() => _isLoading = true); 
+    FocusScope.of(context).unfocus();
+    setState(() => _isLoading = true);
+    try {
+      final mapProvider = context.read<MapStateProvider>();
+      await mapProvider.clearAll();
+      mapProvider.clearRoutes();
+      await mapProvider.drawDestinationMarker(destPos, placeName);
+      setState(() {
+        _previewDestPos = destPos;
+        _polylineData = [];
+      });
+    } catch (e) {
+      _showSnackbar('Có lỗi xảy ra: $e');
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
 
+  Future<void> _getDirections() async {
+    if (_previewDestPos == null) return;
+    setState(() => _isLoading = true);
     try {
       Position? currentPos;
       try {
@@ -157,121 +176,211 @@ class _RoutingPanelState extends State<RoutingPanel> {
           desiredAccuracy: LocationAccuracy.high,
           timeLimit: const Duration(seconds: 5),
         );
-      } catch (e) {
+      } catch (_) {
         currentPos = await Geolocator.getLastKnownPosition();
       }
 
-      double startLng = currentPos?.longitude ?? 109.1967;
-      double startLat = currentPos?.latitude ?? 12.2388;
+      final startLng = currentPos?.longitude ?? 109.1967;
+      final startLat = currentPos?.latitude ?? 12.2388;
       final startPos = mapbox.Position(startLng, startLat);
 
-      final routes = await RouteUtils.getMultipleMapboxRoutes(startPos, destPos);
+      final routes = await RouteUtils.getMultipleMapboxRoutes(startPos, _previewDestPos!);
+      if (routes.isEmpty) { _showSnackbar('Không tìm thấy đường đi tới điểm này!'); return; }
 
-      if (routes.isEmpty) {
-        _showToast('Không tìm thấy đường đi tới điểm này!');
-        return;
-      }
+      final mapProvider = context.read<MapStateProvider>();
+      mapProvider.setRoutesData(routes, mapProvider.previewDestName ?? '');
+      await mapProvider.drawMultipleRoutesPreview();
 
-      if (mounted) {
-        context.read<MapStateProvider>().setRoutesData(routes, placeName);
-        await context.read<MapStateProvider>().drawMultipleRoutesPreview();
-        await context.read<MapStateProvider>().drawDestinationMarker(destPos, placeName);
-      }
-
-      setState(() {
-        _previewDestPos = destPos;
-      });
-
+      await _loadRouteDetails(routes, mapProvider.selectedRouteIndex, startPos);
     } catch (e) {
-      _showToast('Có lỗi xảy ra khi tìm đường: $e');
+      _showSnackbar('Có lỗi xảy ra khi tìm đường: $e');
     } finally {
-      setState(() => _isLoading = false); 
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _loadRouteDetails(
+    List<dynamic> routes,
+    int routeIndex,
+    mapbox.Position startPos,
+  ) async {
+    final mapProvider = context.read<MapStateProvider>();
+    final geometry = routes[routeIndex]['geometry']['coordinates'] as List;
+    final positions = geometry
+        .map((c) => mapbox.Position(c[0].toDouble(), c[1].toDouble()))
+        .toList();
+
+    mapProvider.fitBoundsToPositions([startPos, ...positions]);
+
+    _polylineData = RouteUtils.downsamplePolyline(
+      geometry.map<Map<String, double>>((c) => {
+        'lng': (c[0] as num).toDouble(),
+        'lat': (c[1] as num).toDouble(),
+      }).toList(),
+    );
+
+    await mapProvider.drawWeatherMarkers([]);
+    _crossGroupRisks = [];
+
+    final matchPoints = RouteUtils.extractWaypointsEvery50Km(positions);
+    if (matchPoints.isNotEmpty) {
+      _showSnackbar('Đang phân tích thời tiết trên lộ trình...');
+      final weatherWarnings = <WarningMarker>[];
+      for (int i = 0; i < matchPoints.length; i++) {
+        final w = await WeatherApi.checkWeatherRisk(
+          matchPoints[i].lat.toDouble(),
+          matchPoints[i].lng.toDouble(),
+          progressKm: (i + 1) * 50.0,
+        );
+        if (w != null) weatherWarnings.add(w);
+      }
+      if (weatherWarnings.isNotEmpty && mounted) {
+        await mapProvider.drawWeatherMarkers(weatherWarnings);
+        _showSnackbar('Phát hiện ${weatherWarnings.length} khu vực thời tiết xấu!');
+      }
+    }
+
+    _crossGroupRisks = await _warningRepo.getRiskLabelsNearRoute(polyline: _polylineData);
+    if (_crossGroupRisks.isNotEmpty && mounted) {
+      _redrawAllRisks();
+      _showSnackbar('Phát hiện ${_crossGroupRisks.length} cảnh báo nguy hiểm trên lộ trình!');
     }
   }
 
   Future<void> _startRouting() async {
     final mapProvider = context.read<MapStateProvider>();
-    
-    if (mapProvider.availableRoutes.isEmpty) return; 
-    
-    setState(() => _isLoading = true);
 
+    // Nếu chưa có routes (bấm "Bắt đầu đi" thẳng từ giai đoạn 1), fetch trước
+    if (mapProvider.availableRoutes.isEmpty) {
+      await _getDirections();
+      if (!mounted || mapProvider.availableRoutes.isEmpty) return;
+    }
+
+    setState(() => _isLoading = true);
     try {
       final chosenRoute = mapProvider.availableRoutes[mapProvider.selectedRouteIndex];
       final geometry = chosenRoute['geometry']['coordinates'] as List;
-
       final routeCoords = geometry
           .map((c) => mapbox.Position(c[0].toDouble(), c[1].toDouble()))
           .toList();
-          
-      final List<Map<String, double>> polylineData = RouteUtils.downsamplePolyline(
-        geometry
-            .map<Map<String, double>>((c) => {
-                  'lng': (c[0] as num).toDouble(),
-                  'lat': (c[1] as num).toDouble()
-                })
-            .toList(),
-      );
 
       await mapProvider.drawRoutePolyline(routeCoords);
       mapProvider.setFullRoute(routeCoords);
 
       if (widget.roomId != null && widget.roomId!.isNotEmpty) {
         await _roomRepo.setRoomRoute(
-          roomId: widget.roomId!, 
-          polyline: polylineData,
+          roomId: widget.roomId!,
+          polyline: _polylineData,
           startName: 'Vị trí hiện tại',
-          endName: mapProvider.previewDestName ?? 'Điểm đến', 
+          endName: mapProvider.previewDestName ?? 'Điểm đến',
         );
       }
 
-      _crossGroupRisks = await _warningRepo.getRiskLabelsNearRoute(polyline: polylineData);
-      if (_crossGroupRisks.isNotEmpty && mounted) {
-        _redrawAllRisks();
-        _showToast('Phát hiện ${_crossGroupRisks.length} cảnh báo nguy hiểm trên lộ trình!');
-      }
-      _startCrossGroupRiskTimer(polylineData);
-
-      final matchPoints = RouteUtils.extractWaypointsEvery50Km(routeCoords);
-
-      if (matchPoints.isNotEmpty) {
-        _showToast("Đang phân tích thời tiết trên lộ trình...");
-        List<WarningMarker> weatherWarnings = [];
-
-        for (int i = 0; i < matchPoints.length; i++) {
-          final warning = await WeatherApi.checkWeatherRisk(
-            matchPoints[i].lat.toDouble(),
-            matchPoints[i].lng.toDouble(),
-            progressKm: (i + 1) * 50.0,
-          );
-          if (warning != null) weatherWarnings.add(warning);
-        }
-
-        if (weatherWarnings.isNotEmpty) {
-          await mapProvider.drawWeatherMarkers(weatherWarnings);
-          _showToast("Phát hiện ${weatherWarnings.length} khu vực thời tiết xấu!");
-        }
-      }
+      if (_polylineData.isNotEmpty) _startCrossGroupRiskTimer(_polylineData);
 
       mapProvider.startNavigating();
       _startNavGpsStream();
+      mapProvider.flyToCurrentLocation();
 
       setState(() {
-        _routeDistance = chosenRoute['distance'] / 1000.0;
-        _routeDurationMins = (chosenRoute['duration'] / 60.0).round();
+        _routeDistance = (chosenRoute['distance'] as num).toDouble() / 1000.0;
+        _routeDurationMins = ((chosenRoute['duration'] as num).toDouble() / 60.0).round();
       });
-
     } catch (e) {
-      _showToast("Lỗi vẽ đường: $e");
+      _showSnackbar('Lỗi bắt đầu điều hướng: $e');
     } finally {
       setState(() => _isLoading = false);
     }
   }
 
-  void _showToast(String message) {
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
-    }
+  String get _effectiveRoomId {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (widget.roomId != null && widget.roomId!.isNotEmpty) return widget.roomId!;
+    return uid != null ? uidToSoloRoomCode(uid) : '';
+  }
+
+  void _showSnackbar(String message) {
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Widget _buildRouteSelector(MapStateProvider mapProvider) {
+    final routes = mapProvider.availableRoutes;
+    final fastestSecs = routes
+        .map((r) => (r['duration'] as num).toDouble())
+        .reduce((a, b) => a < b ? a : b);
+    final selected = routes[mapProvider.selectedRouteIndex];
+    final selKm = (selected['distance'] / 1000).toStringAsFixed(1);
+    final selMins = (selected['duration'] / 60).round();
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.straighten, size: 16, color: Colors.blueAccent),
+            const SizedBox(width: 4),
+            Text('$selKm km', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.blueAccent)),
+            const SizedBox(width: 16),
+            const Icon(Icons.schedule, size: 16, color: Colors.blueAccent),
+            const SizedBox(width: 4),
+            Text(
+              selMins > 60 ? '${selMins ~/ 60} giờ ${selMins % 60} phút' : '$selMins phút',
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.blueAccent),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: List.generate(routes.length, (index) {
+              final isSelected = mapProvider.selectedRouteIndex == index;
+              final durationMins = (routes[index]['duration'] / 60).round();
+              final isFastest = (routes[index]['duration'] as num).toDouble() == fastestSecs;
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6.0),
+                child: ChoiceChip(
+                  label: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'Tuyến ${index + 1}',
+                        style: TextStyle(fontWeight: isSelected ? FontWeight.bold : FontWeight.normal),
+                      ),
+                      Text(
+                        isFastest ? '$durationMins ph ✓' : '$durationMins ph',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: isFastest ? Colors.green[700] : Colors.grey[600],
+                          fontWeight: isFastest ? FontWeight.w600 : FontWeight.normal,
+                        ),
+                      ),
+                    ],
+                  ),
+                  selected: isSelected,
+                  selectedColor: Colors.blue[100],
+                  onSelected: (sel) async {
+                    if (!sel || index == mapProvider.selectedRouteIndex) return;
+                    mapProvider.selectRoute(index);
+                    await mapProvider.drawMultipleRoutesPreview();
+                    Position? cur;
+                    try { cur = await Geolocator.getCurrentPosition(timeLimit: const Duration(seconds: 3)); }
+                    catch (_) { cur = await Geolocator.getLastKnownPosition(); }
+                    await _loadRouteDetails(
+                      mapProvider.availableRoutes,
+                      index,
+                      mapbox.Position(cur?.longitude ?? 109.1967, cur?.latitude ?? 12.2388),
+                    );
+                  },
+                ),
+              );
+            }),
+          ),
+        ),
+      ],
+    );
   }
 
   @override
@@ -281,130 +390,95 @@ class _RoutingPanelState extends State<RoutingPanel> {
     return Stack(
       children: [
         if (!mapProvider.isNavigating)
-          Align(
-            alignment: Alignment.topCenter,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  RoutingSearchBar(
-                    onDestinationSelected: _handleDestinationSelected,
-                    onClear: () {
-                      context.read<MapStateProvider>().clearAll();
-                      mapProvider.clearRoutes();
-                      setState(() {
-                        _previewDestPos = null;
-                      });
-                    },
-                  ),
-                ],
-              ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: RoutingSearchBar(
+              onDestinationSelected: _handleDestinationSelected,
+              onClear: () async {
+                await context.read<MapStateProvider>().clearAll();
+                mapProvider.clearRoutes();
+                setState(() {
+                  _previewDestPos = null;
+                  _polylineData = [];
+                });
+              },
+            ),
+          ),
+
+        if (_previewDestPos != null && mapProvider.availableRoutes.isEmpty && !mapProvider.isNavigating && !_isLoading)
+          _BottomCard(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.location_on, color: Colors.red, size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        mapProvider.previewDestName ?? 'Điểm đến',
+                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: _getDirections,
+                        icon: const Icon(Icons.directions, color: Colors.white, size: 18),
+                        label: const Text('Đường đi', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.blue[700],
+                          minimumSize: const Size(0, 48),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                          elevation: 3,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: _startRouting,
+                        icon: const Icon(Icons.two_wheeler, color: Colors.white, size: 18),
+                        label: const Text('Bắt đầu đi', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.green[700],
+                          minimumSize: const Size(0, 48),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                          elevation: 3,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
 
         if (mapProvider.availableRoutes.isNotEmpty && !_isLoading && !mapProvider.isNavigating)
-          Align(
-            alignment: Alignment.bottomCenter,
-            child: Container(
-              margin: const EdgeInsets.only(bottom: 24.0, left: 16, right: 16),
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(20),
-                boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, -2))],
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Builder(builder: (_) {
-                    final routes = mapProvider.availableRoutes;
-                    final fastestSecs = routes
-                        .map((r) => (r['duration'] as num).toDouble())
-                        .reduce((a, b) => a < b ? a : b);
-                    final selected = routes[mapProvider.selectedRouteIndex];
-                    final selKm = (selected['distance'] / 1000).toStringAsFixed(1);
-                    final selMins = (selected['duration'] / 60).round();
-                    return Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(Icons.straighten, size: 16, color: Colors.blueAccent),
-                            const SizedBox(width: 4),
-                            Text('$selKm km', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.blueAccent)),
-                            const SizedBox(width: 16),
-                            const Icon(Icons.schedule, size: 16, color: Colors.blueAccent),
-                            const SizedBox(width: 4),
-                            Text(
-                              selMins > 60
-                                  ? '${selMins ~/ 60} giờ ${selMins % 60} phút'
-                                  : '$selMins phút',
-                              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.blueAccent),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: List.generate(routes.length, (index) {
-                              final isSelected = mapProvider.selectedRouteIndex == index;
-                              final durationMins = (routes[index]['duration'] / 60).round();
-                              final isFastest = (routes[index]['duration'] as num).toDouble() == fastestSecs;
-                              return Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 6.0),
-                                child: ChoiceChip(
-                                  label: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Text(
-                                        'Tuyến ${index + 1}',
-                                        style: TextStyle(fontWeight: isSelected ? FontWeight.bold : FontWeight.normal),
-                                      ),
-                                      Text(
-                                        isFastest ? '$durationMins ph ✓' : '$durationMins ph',
-                                        style: TextStyle(
-                                          fontSize: 11,
-                                          color: isFastest ? Colors.green[700] : Colors.grey[600],
-                                          fontWeight: isFastest ? FontWeight.w600 : FontWeight.normal,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  selected: isSelected,
-                                  selectedColor: Colors.blue[100],
-                                  onSelected: (sel) async {
-                                    if (sel) {
-                                      mapProvider.selectRoute(index);
-                                      await mapProvider.drawMultipleRoutesPreview();
-                                    }
-                                  },
-                                ),
-                              );
-                            }),
-                          ),
-                        ),
-                      ],
-                    );
-                  }),
-                  const SizedBox(height: 16),
-
-                  ElevatedButton.icon(
-                    onPressed: _startRouting,
-                    icon: const Icon(Icons.two_wheeler, color: Colors.white),
-                    label: const Text('Bắt đầu đi', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.blue[700],
-                      minimumSize: const Size(double.infinity, 50),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-                      elevation: 4,
-                    ),
+          _BottomCard(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _buildRouteSelector(mapProvider),
+                const SizedBox(height: 16),
+                ElevatedButton.icon(
+                  onPressed: _startRouting,
+                  icon: const Icon(Icons.two_wheeler, color: Colors.white),
+                  label: const Text('Bắt đầu đi', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blue[700],
+                    minimumSize: const Size(double.infinity, 50),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                    elevation: 4,
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
 
@@ -490,40 +564,31 @@ class _RoutingPanelState extends State<RoutingPanel> {
                         backgroundColor: Colors.orange[700],
                         onPressed: () async {
                           final pos = _myLastPos;
-                          if (pos == null) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('Chưa lấy được vị trí GPS')),
-                            );
-                            return;
-                          }
-                          final uid = FirebaseAuth.instance.currentUser?.uid;
-                          final effectiveRoomId =
-                              (widget.roomId != null && widget.roomId!.isNotEmpty)
-                                  ? widget.roomId!
-                                  : (uid != null ? uidToSoloRoomCode(uid) : '');
-                          if (effectiveRoomId.isEmpty) return;
+                          if (pos == null) { _showSnackbar('Chưa lấy được vị trí GPS'); return; }
+                          final roomId = _effectiveRoomId;
+                          if (roomId.isEmpty) return;
                           final reported = await RiskReportSheet.show(
                             context,
-                            roomId: effectiveRoomId,
+                            roomId: roomId,
                             lat: pos.lat.toDouble(),
                             lng: pos.lng.toDouble(),
                           );
-                          if (reported && mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('Đã báo cáo sự cố thành công!')),
-                            );
-                          }
+                          if (reported && mounted) _showSnackbar('Đã báo cáo sự cố thành công!');
                         },
                         child: const Icon(Icons.warning_amber_rounded, color: Colors.white),
                       ),
                       const SizedBox(width: 8),
                       FloatingActionButton.small(
                         heroTag: 'stop_nav_fab',
-                        onPressed: () {
+                        onPressed: () async {
                           _riskRefreshTimer?.cancel();
                           _stopNavGpsStream();
-                          context.read<MapStateProvider>().clearAll();
+                          await context.read<MapStateProvider>().clearAll();
                           mapProvider.clearRoutes();
+                          setState(() {
+                            _previewDestPos = null;
+                            _polylineData = [];
+                          });
                         },
                         backgroundColor: Colors.redAccent,
                         child: const Icon(Icons.close, color: Colors.white),
@@ -584,32 +649,24 @@ class _RoutingPanelState extends State<RoutingPanel> {
                       currentPos = await Geolocator.getLastKnownPosition();
                     }
 
-                    final uid = FirebaseAuth.instance.currentUser?.uid;
-                    final effectiveRoomId =
-                        (widget.roomId != null && widget.roomId!.isNotEmpty)
-                            ? widget.roomId!
-                            : (uid != null ? uidToSoloRoomCode(uid) : '');
-
+                    final roomId = _effectiveRoomId;
                     final result = await GeminiAiApi.analyzeCommand(
                       spokenText,
-                      roomId: effectiveRoomId,
+                      roomId: roomId,
                       currentLat: currentPos?.latitude,
                       currentLng: currentPos?.longitude,
                     );
 
-                    if (result == null) {
-                      _showToast('Không kết nối được AI');
-                      return;
-                    }
-
+                    if (result == null) { _showSnackbar('Không kết nối được AI'); return; }
                     if (!mounted) return;
+
                     await VoiceActionDispatcher(
                       context: context,
                       isInGroup: widget.roomId?.isNotEmpty == true,
-                      roomId: effectiveRoomId,
+                      roomId: roomId,
                       currentLat: currentPos?.latitude,
                       currentLng: currentPos?.longitude,
-                      currentUserId: uid ?? '',
+                      currentUserId: FirebaseAuth.instance.currentUser?.uid ?? '',
                       onNavigateTo: _handleDestinationSelected,
                     ).dispatch(result);
                   },
@@ -617,6 +674,28 @@ class _RoutingPanelState extends State<RoutingPanel> {
               ),
             ),
       ],
+    );
+  }
+}
+
+class _BottomCard extends StatelessWidget {
+  final Widget child;
+  const _BottomCard({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 24, left: 16, right: 16),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, -2))],
+        ),
+        child: child,
+      ),
     );
   }
 }

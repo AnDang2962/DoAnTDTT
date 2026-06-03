@@ -10,6 +10,7 @@ import '../../main_map/providers/map_state_provider.dart';
 
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../../../core/services/room_session_service.dart';
 
 /// Group Radar Lobby — màn hình tạo/vào phòng nhóm.
 ///
@@ -36,6 +37,62 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
 
   String? _activeRoomId;
   UserModel? _activeUser;
+
+  @override
+  void initState() {
+    super.initState();
+    _tryRestoreSession();
+  }
+
+  /// Khi app khởi động lại sau khi bị kill, thử khôi phục session cũ.
+  /// Kiểm tra Firestore xem user còn trong phòng không trước khi restore.
+  Future<void> _tryRestoreSession() async {
+    final session = await RoomSessionService.load();
+    if (session == null) return;
+
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+
+    final roomId = session['roomId']!;
+
+    // Kiểm tra phòng còn tồn tại và user vẫn là thành viên
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('rooms')
+          .doc(roomId)
+          .get();
+      if (!doc.exists) {
+        await RoomSessionService.clear();
+        return;
+      }
+      final data = doc.data();
+      if (data == null || data['isActive'] != true) {
+        await RoomSessionService.clear();
+        return;
+      }
+      final memberInfo = data['memberInfo'] as Map?;
+      if (memberInfo == null || !memberInfo.containsKey(uid)) {
+        await RoomSessionService.clear();
+        return;
+      }
+    } catch (e) {
+      debugPrint('[RoomLobbyScreen] restore validation error: $e');
+      return;
+    }
+
+    if (!mounted) return;
+    final user = UserModel(
+      id: uid,
+      name: session['userName']!,
+      role: _stringToRole(session['userRole']!),
+    );
+    context.read<MapStateProvider>().clearAll();
+    context.read<MembersProvider>().updateRoomIdForSOS(roomId);
+    setState(() {
+      _activeRoomId = roomId;
+      _activeUser = user;
+    });
+  }
 
   @override
   void dispose() {
@@ -92,6 +149,8 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
     if (!wasLeader) {
       await _roomRepo.leaveRoom(_activeRoomId!);
     }
+
+    await RoomSessionService.clear();
 
     if (!mounted) return;
     context.read<MapStateProvider>().setGroupMode(false);
@@ -172,9 +231,15 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
         }
       }
 
+      await RoomSessionService.save(
+        roomId: roomId!,
+        userName: user.name,
+        userRole: _selectedRole,
+      );
+
       if (!mounted) return;
       context.read<MapStateProvider>().clearAll();
-      context.read<MembersProvider>().updateRoomIdForSOS(roomId!);
+      context.read<MembersProvider>().updateRoomIdForSOS(roomId);
       setState(() {
         _activeRoomId = roomId;
         _activeUser = user;

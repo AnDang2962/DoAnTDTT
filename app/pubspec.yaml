@@ -41,6 +41,7 @@ dependencies:
   # --- 5. TIỆN ÍCH ---
   crypto: ^3.0.6               # SHA-256 hash để tạo solo room ID
   flutter_tts: ^4.2.0          # Text-to-Speech cho voice response
+  shared_preferences: ^2.3.5   # Lưu session phòng nhóm để khôi phục khi thoát app
 
   # --- 6. GIAO DIỆN ---
   cupertino_icons: ^1.0.8

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_compass/flutter_compass.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mapbox;
@@ -29,7 +30,6 @@ class MapStateProvider extends ChangeNotifier {
   bool _isFollowing = false;
   bool get isFollowing => _isFollowing;
   double? _lastBearing;
-  double get lastBearing => _lastBearing ?? 0.0;
   String? previewDestName;
 
   void setRoutesData(List<dynamic> routes, String destName) {
@@ -48,7 +48,26 @@ class MapStateProvider extends ChangeNotifier {
   void startNavigating() {
     isNavigating = true;
     _isFollowing = true;
+    _mapboxMap?.location.updateSettings(
+      mapbox.LocationComponentSettings(enabled: false),
+    );
     notifyListeners();
+  }
+
+  Future<void> setNavArrow(mapbox.Position pos) async {
+    if (_pointManager == null) return;
+    _navArrowImage ??= await MarkerBuilder.buildNavigationArrow();
+    if (_navArrow != null) {
+      _navArrow!.geometry = mapbox.Point(coordinates: pos);
+      try { await _pointManager!.update(_navArrow!); } catch (_) {}
+    } else {
+      _navArrow = await _pointManager!.create(mapbox.PointAnnotationOptions(
+        geometry: mapbox.Point(coordinates: pos),
+        image: _navArrowImage,
+        iconAnchor: mapbox.IconAnchor.CENTER,
+        iconRotate: 0,
+      ));
+    }
   }
 
   void resetNorth() {
@@ -142,7 +161,12 @@ class MapStateProvider extends ChangeNotifier {
     ));
   }
 
-  final List<mapbox.PointAnnotation> _memberMarkers = [];
+  final Map<String, mapbox.PointAnnotation> _memberMarkerMap = {};
+  Map<String, String> _lastMemberRoles = {};
+
+  mapbox.PointAnnotation? _navArrow;
+  Uint8List? _navArrowImage;
+
   final List<mapbox.PointAnnotation> _destMarkers = [];
   final List<mapbox.PointAnnotation> _weatherMarkers = [];
   final List<mapbox.PointAnnotation> _riskMarkers = [];
@@ -167,7 +191,6 @@ class MapStateProvider extends ChangeNotifier {
     _compassSub = FlutterCompass.events?.listen((event) {
       final heading = event.heading;
       if (heading == null || !_isFollowing || isNavigating) return;
-      // Khi đứng yên (không nav): xoay map theo la bàn điện thoại
       _lastBearing = heading;
       _mapboxMap?.easeTo(
         mapbox.CameraOptions(bearing: heading),
@@ -231,7 +254,7 @@ class MapStateProvider extends ChangeNotifier {
     ));
   }
 
-  Future<void> drawDestinationMarker(mapbox.Position dest, String name) async {
+  Future<void> drawDestinationMarker(mapbox.Position dest, String name, {bool flyToMarker = true}) async {
     if (_pointManager == null) return;
     for (final m in _destMarkers) {
       try { await _pointManager!.delete(m); } catch (_) {}
@@ -239,7 +262,8 @@ class MapStateProvider extends ChangeNotifier {
     _destMarkers.clear();
 
     _destinationPosition = dest;
-    final image = await MarkerBuilder.buildDestinationBubble(label: name);
+    previewDestName = name;
+    final image = await MarkerBuilder.buildDestinationPin();
     final annotation = await _pointManager!.create(
       mapbox.PointAnnotationOptions(
         geometry: mapbox.Point(coordinates: dest),
@@ -248,35 +272,47 @@ class MapStateProvider extends ChangeNotifier {
       ),
     );
     _destMarkers.add(annotation);
-    flyTo(dest, zoom: 13.0);
+    if (flyToMarker) flyTo(dest, zoom: 13.0);
   }
 
   Future<void> drawMemberMarkers(
     Map<String, mapbox.Position> locations,
-    Map<String, String> displayNames,
-    Map<String, String> roles,
-  ) async {
+    Map<String, String> roles, {
+    String? skipUid,
+  }) async {
     if (_pointManager == null) return;
-    for (final m in _memberMarkers) {
-      try { await _pointManager!.delete(m); } catch (_) {}
+
+    final toRemove = _memberMarkerMap.keys
+        .where((uid) => !locations.containsKey(uid) || uid == skipUid)
+        .toList();
+    for (final uid in toRemove) {
+      try { await _pointManager!.delete(_memberMarkerMap[uid]!); } catch (_) {}
+      _memberMarkerMap.remove(uid);
     }
-    _memberMarkers.clear();
 
     for (final entry in locations.entries) {
       final uid = entry.key;
+      if (uid == skipUid) continue;
       final pos = entry.value;
       final role = roles[uid] ?? 'member';
 
-      final image = await MarkerBuilder.buildMemberBubble(name: '', role: role);
-      final annotation = await _pointManager!.create(
-        mapbox.PointAnnotationOptions(
+      if (_memberMarkerMap.containsKey(uid) && _lastMemberRoles[uid] == role) {
+        _memberMarkerMap[uid]!.geometry = mapbox.Point(coordinates: pos);
+        try { await _pointManager!.update(_memberMarkerMap[uid]!); } catch (_) {}
+      } else {
+        if (_memberMarkerMap.containsKey(uid)) {
+          try { await _pointManager!.delete(_memberMarkerMap[uid]!); } catch (_) {}
+        }
+        final image = await MarkerBuilder.buildMemberBubble(role: role);
+        _memberMarkerMap[uid] = await _pointManager!.create(mapbox.PointAnnotationOptions(
           geometry: mapbox.Point(coordinates: pos),
           image: image,
           iconAnchor: mapbox.IconAnchor.BOTTOM,
-        ),
-      );
-      _memberMarkers.add(annotation);
+        ));
+      }
     }
+
+    _lastMemberRoles = Map.from(roles);
   }
 
   Future<void> drawMultipleRoutesPreview() async {
@@ -310,7 +346,7 @@ class MapStateProvider extends ChangeNotifier {
 
     final occupiedPositions = <mapbox.Position>[];
     if (_destinationPosition != null) occupiedPositions.add(_destinationPosition!);
-    for (final m in _memberMarkers) { occupiedPositions.add(m.geometry.coordinates); }
+    for (final m in _memberMarkerMap.values) { occupiedPositions.add(m.geometry.coordinates); }
     for (final m in _riskMarkers) { occupiedPositions.add(m.geometry.coordinates); }
 
     for (final w in weatherList) {
@@ -319,10 +355,10 @@ class MapStateProvider extends ChangeNotifier {
         newLat: w.lat,
         newLng: w.lng,
       );
-      final image = await MarkerBuilder.buildBubble(
+      final image = await MarkerBuilder.buildBadgeMarker(
         emoji: w.emoji,
         label: w.vi,
-        color: w.color,
+        ringColor: w.color,
       );
       final annotation = await _pointManager!.create(
         mapbox.PointAnnotationOptions(
@@ -355,10 +391,10 @@ class MapStateProvider extends ChangeNotifier {
         newLat: risk.lat,
         newLng: risk.lng,
       );
-      final image = await MarkerBuilder.buildBubble(
+      final image = await MarkerBuilder.buildBadgeMarker(
         emoji: risk.emoji,
         label: risk.vi,
-        color: risk.color,
+        ringColor: risk.color,
       );
       final annotation = await _pointManager!.create(
         mapbox.PointAnnotationOptions(
@@ -372,22 +408,24 @@ class MapStateProvider extends ChangeNotifier {
     }
   }
 
-  void fitBoundsToPositions(List<mapbox.Position> positions) {
+  Future<void> fitBoundsToPositions(List<mapbox.Position> positions) async {
     if (_mapboxMap == null || positions.isEmpty) return;
     if (positions.length == 1) { flyTo(positions.first, zoom: 14.0); return; }
 
     final lats = positions.map((p) => p.lat.toDouble());
     final lngs = positions.map((p) => p.lng.toDouble());
-    final centerLat = (lats.reduce(min) + lats.reduce(max)) / 2;
-    final centerLng = (lngs.reduce(min) + lngs.reduce(max)) / 2;
-    final maxSpan = max(lats.reduce(max) - lats.reduce(min), lngs.reduce(max) - lngs.reduce(min));
 
-    double zoom = 14.0;
-    if (maxSpan > 0.1) zoom = 10.0;
-    else if (maxSpan > 0.05) zoom = 11.5;
-    else if (maxSpan > 0.01) zoom = 13.0;
-
-    flyTo(mapbox.Position(centerLng, centerLat), zoom: zoom);
+    final bounds = mapbox.CoordinateBounds(
+      southwest: mapbox.Point(coordinates: mapbox.Position(lngs.reduce(min), lats.reduce(min))),
+      northeast: mapbox.Point(coordinates: mapbox.Position(lngs.reduce(max), lats.reduce(max))),
+      infiniteBounds: false,
+    );
+    final cameraOpts = await _mapboxMap!.cameraForCoordinateBounds(
+      bounds,
+      mapbox.MbxEdgeInsets(top: 80, left: 40, bottom: 200, right: 40),
+      null, null, null, null,
+    );
+    _mapboxMap!.flyTo(cameraOpts, mapbox.MapAnimationOptions(duration: 800));
   }
 
   @override
@@ -402,9 +440,13 @@ class MapStateProvider extends ChangeNotifier {
     isOffRoute = false;
     _isFollowing = false;
     weatherWarnings = [];
+    previewDestName = null;
+    _navArrow = null;
+    _navArrowImage = null;
     if (_pointManager != null) {
       await _pointManager!.deleteAll();
-      _memberMarkers.clear();
+      _memberMarkerMap.clear();
+      _lastMemberRoles.clear();
       _destMarkers.clear();
       _weatherMarkers.clear();
       _riskMarkers.clear();
@@ -413,6 +455,9 @@ class MapStateProvider extends ChangeNotifier {
     if (_polylineManager != null) {
       await _polylineManager!.deleteAll();
     }
+    await _mapboxMap?.location.updateSettings(
+      mapbox.LocationComponentSettings(enabled: true, pulsingEnabled: true),
+    );
     notifyListeners();
   }
 

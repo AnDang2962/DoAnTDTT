@@ -129,7 +129,7 @@ class _MainShellScreenState extends State<MainShellScreen> {
           selectedIndex: _currentIndex,
           onDestinationSelected: (index) {
             if (index == _currentIndex) return;
-            if (_currentIndex == 1 && ctx.read<MapStateProvider>().isGroupModeActive) {
+            if (_currentIndex == 1 && ctx.read<MapStateProvider>().isGroupModeActive && index != 2) {
               ScaffoldMessenger.of(ctx).showSnackBar(
                 const SnackBar(
                   content: Text('Vui lòng rời phòng trước khi chuyển tab'),

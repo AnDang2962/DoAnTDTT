@@ -63,6 +63,8 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
   DateTime? _lastGapCheck;
 
   bool _isInfoExpanded = false;
+  bool _isLoading = false;
+  List<Map<String, double>> _polylineData = [];
 
   @override
   void initState() {
@@ -94,6 +96,9 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
         mapProvider.trimRouteToProgress(_myLastPos!);
         if (mapProvider.isNavigating && mapProvider.isFollowing) {
           mapProvider.easeTo(_myLastPos!, bearing: pos.heading >= 0 ? pos.heading : null);
+        }
+        if (mapProvider.isNavigating) {
+          unawaited(mapProvider.setNavArrow(_myLastPos!));
         }
       }
     });
@@ -128,8 +133,9 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
           mapProvider.startNavigating();
           final endName = routeData['endName']?.toString() ?? 'Đích đến';
           if (coords.isNotEmpty) {
-            await mapProvider.drawDestinationMarker(coords.last, endName);
+            await mapProvider.drawDestinationMarker(coords.last, endName, flyToMarker: false);
           }
+          mapProvider.flyToCurrentLocation();
 
           // Load risk + thời tiết khi route mới (member join sau hoặc leader đổi tuyến)
           if (routeKey != _loadedRouteKey) {
@@ -182,15 +188,16 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
 
   void _updateMapMembers() {
     if (!mounted) return;
-    final displayNames = <String, String>{};
     final roles = <String, String>{};
     _memberInfo.forEach((uid, info) {
-      if (info is Map) {
-        displayNames[uid] = info['displayName']?.toString() ?? 'User';
-        roles[uid] = info['role']?.toString() ?? 'member';
-      }
+      if (info is Map) roles[uid] = info['role']?.toString() ?? 'member';
     });
-    context.read<MapStateProvider>().drawMemberMarkers(_memberLocations, displayNames, roles);
+    final mapProvider = context.read<MapStateProvider>();
+    mapProvider.drawMemberMarkers(
+      _memberLocations,
+      roles,
+      skipUid: mapProvider.isNavigating ? widget.currentUser.id : null,
+    );
   }
 
   void _checkFormationDistance() {
@@ -232,34 +239,69 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
     }
   }
 
+  void _showSnackbar(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), duration: const Duration(seconds: 2)));
+  }
+
   void _handleDestinationSelected(mapbox.Position destPos, String placeName) async {
     if (widget.currentUser.role != UserRole.leader) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Chỉ Leader mới có quyền tạo lộ trình!')),
-      );
-      return;
+      _showSnackbar('Chỉ Leader mới có quyền tạo lộ trình!'); return;
     }
     if (_myLastPos == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Chưa lấy được GPS hiện tại của bạn!')),
-      );
-      return;
+      _showSnackbar('Chưa lấy được GPS hiện tại của bạn!'); return;
     }
+    final mapProvider = context.read<MapStateProvider>();
+    await mapProvider.clearAll();
+    mapProvider.clearRoutes();
+    await mapProvider.drawDestinationMarker(destPos, placeName);
+    setState(() { _lastDestPos = destPos; _lastDestName = placeName; _polylineData = []; });
+  }
 
-    final routes = await RouteUtils.getMultipleMapboxRoutes(_myLastPos!, destPos);
-    if (routes.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Không tìm thấy đường đi tới điểm này!')),
-      );
-      return;
+  Future<void> _getDirections() async {
+    if (_lastDestPos == null || _myLastPos == null) return;
+    setState(() => _isLoading = true);
+    try {
+      final routes = await RouteUtils.getMultipleMapboxRoutes(_myLastPos!, _lastDestPos!);
+      if (routes.isEmpty) { _showSnackbar('Không tìm thấy đường đi tới điểm này!'); return; }
+      final mapProvider = context.read<MapStateProvider>();
+      mapProvider.setRoutesData(routes, _lastDestName ?? 'Điểm đến');
+      await mapProvider.drawMultipleRoutesPreview();
+      await _loadRouteDetails(routes, mapProvider.selectedRouteIndex);
+    } catch (e) {
+      _showSnackbar('Có lỗi khi tìm đường: $e');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
+  }
 
-    if (mounted) {
-      _lastDestPos = destPos;
-      _lastDestName = placeName;
-      context.read<MapStateProvider>().setRoutesData(routes, placeName);
-      await context.read<MapStateProvider>().drawDestinationMarker(destPos, placeName);
-      await context.read<MapStateProvider>().drawMultipleRoutesPreview();
+  // Load weather + risk + polylineData cho tuyến cụ thể — gọi lại khi đổi tuyến.
+  Future<void> _loadRouteDetails(List<dynamic> routes, int routeIndex) async {
+    if (_myLastPos == null) return;
+    final mapProvider = context.read<MapStateProvider>();
+    final geometry = routes[routeIndex]['geometry']['coordinates'] as List;
+    final positions = geometry
+        .map((c) => mapbox.Position((c[0] as num).toDouble(), (c[1] as num).toDouble()))
+        .toList();
+
+    mapProvider.fitBoundsToPositions([_myLastPos!, ...positions]);
+
+    _polylineData = RouteUtils.downsamplePolyline(
+      geometry.map<Map<String, double>>((c) => {
+        'lng': (c[0] as num).toDouble(),
+        'lat': (c[1] as num).toDouble(),
+      }).toList(),
+    );
+
+    await mapProvider.drawWeatherMarkers([]);
+    _crossGroupRisks = [];
+
+    await _loadWeatherAlongRoute(positions);
+
+    _crossGroupRisks = await _warningRepo.getRiskLabelsNearRoute(polyline: _polylineData);
+    if (_crossGroupRisks.isNotEmpty && mounted) {
+      _redrawAllRisks();
+      _showSnackbar('Phát hiện ${_crossGroupRisks.length} cảnh báo trên lộ trình!');
     }
   }
 
@@ -356,6 +398,32 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
         _redrawAllRisks();
       }
     });
+  }
+
+  Future<void> _startGroupNavigation(MapStateProvider mapProvider) async {
+    if (mapProvider.availableRoutes.isEmpty) return;
+    final chosenRoute = mapProvider.availableRoutes[mapProvider.selectedRouteIndex];
+    final geometry = chosenRoute['geometry']['coordinates'] as List;
+    final routeCoords = geometry
+        .map((c) => mapbox.Position((c[0] as num).toDouble(), (c[1] as num).toDouble()))
+        .toList();
+
+    mapProvider.clearRoutesData();
+    mapProvider.setFullRoute(routeCoords);
+    await mapProvider.drawRoutePolyline(routeCoords);
+
+    if (widget.roomId.isNotEmpty) {
+      await _roomRepo.setRoomRoute(
+        roomId: widget.roomId,
+        polyline: _polylineData,
+        startName: 'Vị trí hiện tại',
+        endName: mapProvider.previewDestName ?? 'Điểm đến',
+      );
+    }
+
+    if (_polylineData.isNotEmpty) _startCrossGroupRiskTimer(_polylineData);
+    mapProvider.startNavigating();
+    mapProvider.flyToCurrentLocation();
   }
 
   String _memberName(String uid) {
@@ -563,127 +631,120 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
               ),
             ),
 
-          Positioned(
-            bottom: 100,
-            left: 16,
-            right: 16,
-            child: Consumer<MapStateProvider>(
-              builder: (context, mapProvider, child) {
-                if (mapProvider.availableRoutes.isEmpty) return const SizedBox.shrink();
+          if (_lastDestPos != null && mapProvider.availableRoutes.isEmpty &&
+              !mapProvider.isNavigating && !_isLoading &&
+              widget.currentUser.role == UserRole.leader)
+            Positioned(
+              bottom: 100,
+              left: 16,
+              right: 16,
+              child: _GroupBottomCard(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.location_on, color: Colors.red, size: 18),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            mapProvider.previewDestName ?? 'Điểm đến',
+                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: _getDirections,
+                            icon: const Icon(Icons.directions, color: Colors.white, size: 18),
+                            label: const Text('Đường đi', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.blue[700],
+                              minimumSize: const Size(0, 48),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: () async {
+                              await _getDirections();
+                              if (!mounted || mapProvider.availableRoutes.isEmpty) return;
+                              await _startGroupNavigation(mapProvider);
+                            },
+                            icon: const Icon(Icons.two_wheeler, color: Colors.white, size: 18),
+                            label: const Text('Bắt đầu đi', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.green[700],
+                              minimumSize: const Size(0, 48),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
 
-                return Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: const [
-                      BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 4)),
-                    ],
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: Row(
-                          children: List.generate(
-                            mapProvider.availableRoutes.length,
-                            (index) => Padding(
-                              padding: const EdgeInsets.only(right: 8.0),
-                              child: ChoiceChip(
-                                label: Text(
-                                  'Tuyến ${index + 1}',
-                                  style: const TextStyle(fontWeight: FontWeight.bold),
-                                ),
-                                selected: mapProvider.selectedRouteIndex == index,
-                                selectedColor: Colors.blue.withValues(alpha: 0.3),
-                                onSelected: (selected) async {
-                                  if (selected) {
-                                    mapProvider.selectRoute(index);
-                                    await mapProvider.drawMultipleRoutesPreview();
-                                  }
-                                },
-                              ),
+          if (mapProvider.availableRoutes.isNotEmpty && !mapProvider.isNavigating &&
+              widget.currentUser.role == UserRole.leader)
+            Positioned(
+              bottom: 100,
+              left: 16,
+              right: 16,
+              child: _GroupBottomCard(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: List.generate(
+                          mapProvider.availableRoutes.length,
+                          (index) => Padding(
+                            padding: const EdgeInsets.only(right: 8.0),
+                            child: ChoiceChip(
+                              label: Text('Tuyến ${index + 1}',
+                                  style: const TextStyle(fontWeight: FontWeight.bold)),
+                              selected: mapProvider.selectedRouteIndex == index,
+                              selectedColor: Colors.blue.withValues(alpha: 0.3),
+                              onSelected: (selected) async {
+                                if (!selected || index == mapProvider.selectedRouteIndex) return;
+                                mapProvider.selectRoute(index);
+                                await mapProvider.drawMultipleRoutesPreview();
+                                await _loadRouteDetails(mapProvider.availableRoutes, index);
+                              },
                             ),
                           ),
                         ),
                       ),
-                      const SizedBox(height: 16),
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton(
-                          onPressed: () async {
-                            final selectedRoute = mapProvider.availableRoutes[mapProvider.selectedRouteIndex];
-                            final geometry = selectedRoute['geometry']['coordinates'] as List;
-
-                            final routeCoords = geometry
-                                .map((c) => mapbox.Position(
-                                      (c[0] as num).toDouble(),
-                                      (c[1] as num).toDouble(),
-                                    ))
-                                .toList();
-
-                            final List<Map<String, double>> polylineData = RouteUtils.downsamplePolyline(
-                              geometry
-                                  .map<Map<String, double>>((c) => {
-                                        'lng': (c[0] as num).toDouble(),
-                                        'lat': (c[1] as num).toDouble(),
-                                      })
-                                  .toList(),
-                            );
-
-                            mapProvider.clearRoutesData();
-
-                            try {
-                              mapProvider.setFullRoute(routeCoords);
-                              await mapProvider.drawRoutePolyline(routeCoords);
-
-                              if (widget.roomId.isNotEmpty) {
-                                await _roomRepo.setRoomRoute(
-                                  roomId: widget.roomId,
-                                  polyline: polylineData,
-                                  startName: 'Vị trí hiện tại',
-                                  endName: mapProvider.previewDestName ?? 'Điểm đến',
-                                );
-                              }
-
-                              mapProvider.startNavigating();
-
-                              _crossGroupRisks = await _warningRepo.getRiskLabelsNearRoute(
-                                polyline: polylineData,
-                              );
-                              if (_crossGroupRisks.isNotEmpty && mounted) {
-                                _redrawAllRisks();
-                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                                  content: Text('Phát hiện ${_crossGroupRisks.length} cảnh báo trên lộ trình!'),
-                                  duration: const Duration(seconds: 2),
-                                ));
-                              }
-                              _startCrossGroupRiskTimer(polylineData);
-
-                              await _loadWeatherAlongRoute(routeCoords);
-                            } catch (e) {
-                              debugPrint('Lỗi ngầm khi bắt đầu đi: $e');
-                            }
-                          },
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.blue,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                          ),
-                          child: const Text(
-                            '🚀 Bắt đầu đi cùng nhóm',
-                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                          ),
-                        ),
+                    ),
+                    const SizedBox(height: 16),
+                    ElevatedButton.icon(
+                      onPressed: () => _startGroupNavigation(mapProvider),
+                      icon: const Icon(Icons.two_wheeler, color: Colors.white),
+                      label: const Text('Bắt đầu đi cùng nhóm',
+                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.blue[700],
+                        minimumSize: const Size(double.infinity, 50),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                        elevation: 4,
                       ),
-                    ],
-                  ),
-                );
-              },
+                    ),
+                  ],
+                ),
+              ),
             ),
-          ),
 
           if (mapProvider.isOffRoute && mapProvider.isNavigating)
             Align(
@@ -768,9 +829,9 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
             ),
           ),
 
-          if (!mapProvider.isFollowing)
+          if (!mapProvider.isNavigating || !mapProvider.isFollowing)
             Positioned(
-              bottom: 100,
+              bottom: 200,
               right: 16,
               child: GestureDetector(
                 onTap: () => context.read<MapStateProvider>().flyToCurrentLocation(),
@@ -792,6 +853,24 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
             ),
         ],
       ),
+    );
+  }
+}
+
+class _GroupBottomCard extends StatelessWidget {
+  final Widget child;
+  const _GroupBottomCard({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 4))],
+      ),
+      child: child,
     );
   }
 }

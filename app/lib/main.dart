@@ -79,13 +79,21 @@ Future<void> main() async {
       debugPrint('⚠ Lỗi connect emulator: $e');
     }
 
-    // Sign-out token cũ (FIX: INVALID_REFRESH_TOKEN sau khi emulator restart)
+    // Chỉ sign-out nếu token thực sự hết hạn (emulator bị restart).
+    // Nếu token còn dùng được thì giữ nguyên UID để session restore hoạt động.
     try {
-      if (FirebaseAuth.instance.currentUser != null) {
-        await FirebaseAuth.instance.signOut();
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser != null) {
+        try {
+          await currentUser.getIdToken(true);
+          debugPrint('✓ Token còn hợp lệ, giữ UID: ${currentUser.uid}');
+        } catch (_) {
+          await FirebaseAuth.instance.signOut();
+          debugPrint('⚠ Token hết hạn (emulator restart?) → sign-out');
+        }
       }
     } catch (e) {
-      debugPrint('⚠ Sign-out cũ failed: $e');
+      debugPrint('⚠ Auth check failed: $e');
     }
   } else {
     debugPrint('▶ PRODUCTION mode — không connect emulator');

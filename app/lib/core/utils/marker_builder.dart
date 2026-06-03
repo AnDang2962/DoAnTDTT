@@ -1,329 +1,268 @@
 import 'dart:async';
+import 'dart:math' show sqrt;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 
-/// Tiện ích hỗ trợ vẽ các điểm đánh dấu (Marker) trên bản đồ thành dạng hình ảnh (PNG).
-/// Vì thư viện Mapbox 2.x yêu cầu hình ảnh cho các điểm đánh dấu (PointAnnotation),
-/// chúng ta phải dùng code vẽ ra hình ảnh (như một bong bóng chat) thay vì dùng Widget của Flutter.
 class MarkerBuilder {
-  /// Hàm cốt lõi: Vẽ một bong bóng chung có chứa biểu tượng cảm xúc (emoji) và chữ.
-  /// Hình dạng: Một hình chữ nhật bo tròn với cái đuôi nhọn trỏ xuống dưới.
-  static Future<Uint8List> buildBubble({
+  static Future<Uint8List> buildBadgeMarker({
     required String emoji,
     required String label,
-    required Color color,
+    required Color ringColor,
     double devicePixelRatio = 3.0,
   }) async {
+    const double R = 22.0;
+    const double innerR = R - 3.5;
+    const double pillH = 22.0;
+    const double pillW = 112.0;
+    const double pillCorner = 11.0;
+    const double gap = 5.0;
+    const double topPad = 3.0;
+    const double sidePad = 8.0;
+    const double bottomPad = 3.0;
+
+    const double imgW = pillW + sidePad * 2;
+    const double imgH = topPad + pillH + gap + R * 2 + bottomPad;
+    const double cx = imgW / 2;
+    const double circleCY = topPad + pillH + gap + R;
+    const double pillCY = topPad + pillH / 2;
+
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
-
-    const double bubbleWidth = 140.0;
-    const double bubbleHeight = 56.0;
-    const double tailHeight = 10.0;
-    const double tailWidth = 16.0;
-    const double cornerRadius = 16.0;
-
     canvas.scale(devicePixelRatio);
 
-    // 1. Vẽ bóng đổ cho bong bóng để tạo độ nổi
-    final shadowPaint = Paint()
-      ..color = Colors.black.withOpacity(0.25)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4.0);
     canvas.drawRRect(
       RRect.fromRectAndRadius(
-        Rect.fromLTWH(2, 2, bubbleWidth, bubbleHeight),
-        const Radius.circular(cornerRadius),
+        Rect.fromCenter(center: Offset(cx + 1, pillCY + 1.5), width: pillW, height: pillH),
+        const Radius.circular(pillCorner),
       ),
-      shadowPaint,
+      Paint()
+        ..color = Colors.black.withValues(alpha: 0.20)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.5),
     );
 
-    // 2. Vẽ hình nền của bong bóng với màu được chỉ định
-    final bgPaint = Paint()..color = color;
     canvas.drawRRect(
       RRect.fromRectAndRadius(
-        const Rect.fromLTWH(0, 0, bubbleWidth, bubbleHeight),
-        const Radius.circular(cornerRadius),
+        Rect.fromCenter(center: Offset(cx, pillCY), width: pillW, height: pillH),
+        const Radius.circular(pillCorner),
       ),
-      bgPaint,
+      Paint()..color = ringColor,
     );
 
-    // 3. Vẽ cái đuôi nhọn trỏ xuống điểm trên bản đồ
-    // tailCenterX canh theo tâm ảnh (bubbleWidth + 4) / 2, không theo tâm bubble
-    // để iconAnchor: BOTTOM ghim đúng đầu mũi nhọn vào tọa độ
-    final tailPath = Path();
-    final tailCenterX = (bubbleWidth + 4) / 2;
-    const double imageHeight = bubbleHeight + tailHeight + 4;
-    tailPath.moveTo(tailCenterX - tailWidth / 2, bubbleHeight - 1);
-    tailPath.lineTo(tailCenterX, imageHeight);
-    tailPath.lineTo(tailCenterX + tailWidth / 2, bubbleHeight - 1);
-    tailPath.close();
-    canvas.drawPath(tailPath, bgPaint);
-
-    // 4. Vẽ Emoji (Biểu tượng) vào bên trái bong bóng
-    final emojiPainter = TextPainter(
-      text: TextSpan(text: emoji, style: const TextStyle(fontSize: 26)),
-      textDirection: TextDirection.ltr,
-    );
-    emojiPainter.layout();
-    emojiPainter.paint(
-      canvas,
-      Offset(12, (bubbleHeight - emojiPainter.height) / 2),
-    );
-
-    // 5. Vẽ đoạn chữ (Label) vào bên phải Emoji
-    final labelPainter = TextPainter(
+    final pillPainter = TextPainter(
       text: TextSpan(
         text: label,
         style: const TextStyle(
           color: Colors.white,
-          fontSize: 14,
-          fontWeight: FontWeight.w600,
-          shadows: [
-            Shadow(
-              offset: Offset(0.5, 0.5),
-              blurRadius: 1.5,
-              color: Colors.black54,
-            ),
-          ],
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+          shadows: [Shadow(offset: Offset(0.5, 0.5), blurRadius: 1.0, color: Colors.black38)],
         ),
-      ),
-      textDirection: TextDirection.ltr,
-      maxLines: 2,
-      ellipsis: '...',
-    );
-    labelPainter.layout(maxWidth: bubbleWidth - 50);
-    labelPainter.paint(
-      canvas,
-      Offset(46, (bubbleHeight - labelPainter.height) / 2),
-    );
-
-    // Kết thúc việc vẽ và xuất ra dạng mảng byte (PNG)
-    final picture = recorder.endRecording();
-    final image = await picture.toImage(
-      ((bubbleWidth + 4) * devicePixelRatio).toInt(),
-      ((bubbleHeight + tailHeight + 4) * devicePixelRatio).toInt(),
-    );
-    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-    return byteData!.buffer.asUint8List();
-  }
-
-  /// Vẽ bong bóng hiển thị Thời Tiết dọc đường đi.
-  /// Nền màu trắng, viền xanh dương, hiển thị nhiệt độ và mô tả ngắn.
-  static Future<Uint8List> buildWeatherBubble({
-    required String temperature,
-    required String description,
-    double devicePixelRatio = 3.0,
-  }) async {
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder);
-
-    const double bubbleWidth = 100.0;
-    const double bubbleHeight = 44.0;
-    const double tailHeight = 8.0;
-    const double tailWidth = 12.0;
-    const double cornerRadius = 12.0;
-
-    canvas.scale(devicePixelRatio);
-
-    // Bóng đổ
-    final shadowPaint = Paint()
-      ..color = Colors.black.withOpacity(0.2)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3.0);
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(2, 2, bubbleWidth, bubbleHeight),
-        const Radius.circular(cornerRadius),
-      ),
-      shadowPaint,
-    );
-
-    // Nền trắng
-    final bgPaint = Paint()..color = Colors.white;
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        const Rect.fromLTWH(0, 0, bubbleWidth, bubbleHeight),
-        const Radius.circular(cornerRadius),
-      ),
-      bgPaint,
-    );
-
-    // Viền xanh
-    final borderPaint = Paint()
-      ..color = Colors.blue.shade300
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.5;
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        const Rect.fromLTWH(0, 0, bubbleWidth, bubbleHeight),
-        const Radius.circular(cornerRadius),
-      ),
-      borderPaint,
-    );
-
-    // Vẽ đuôi — canh tâm theo ảnh, tip tại đáy ảnh để iconAnchor: BOTTOM chính xác
-    final tailPath = Path();
-    final tailCenterX = (bubbleWidth + 4) / 2;
-    const double imageHeight = bubbleHeight + tailHeight + 4;
-    tailPath.moveTo(tailCenterX - tailWidth / 2, bubbleHeight - 1);
-    tailPath.lineTo(tailCenterX, imageHeight);
-    tailPath.lineTo(tailCenterX + tailWidth / 2, bubbleHeight - 1);
-    tailPath.close();
-    canvas.drawPath(tailPath, bgPaint);
-    canvas.drawPath(tailPath, borderPaint);
-
-    // Vẽ nhiệt độ (chữ xanh, in đậm)
-    final tempPainter = TextPainter(
-      text: TextSpan(
-        text: temperature,
-        style: TextStyle(
-          color: Colors.blue.shade800,
-          fontSize: 16,
-          fontWeight: FontWeight.bold,
-        ),
-      ),
-      textDirection: TextDirection.ltr,
-    );
-    tempPainter.layout();
-    tempPainter.paint(canvas, const Offset(8, 4));
-
-    // Vẽ mô tả thời tiết (chữ xám nhỏ)
-    final descPainter = TextPainter(
-      text: TextSpan(
-        text: description,
-        style: TextStyle(color: Colors.grey.shade700, fontSize: 10),
       ),
       textDirection: TextDirection.ltr,
       maxLines: 1,
-      ellipsis: '...',
+      ellipsis: '…',
     );
-    descPainter.layout(maxWidth: bubbleWidth - 16);
-    descPainter.paint(canvas, const Offset(8, 24));
+    pillPainter.layout(maxWidth: pillW - 14);
+    pillPainter.paint(canvas, Offset(cx - pillPainter.width / 2, pillCY - pillPainter.height / 2));
+
+    canvas.drawCircle(
+      Offset(cx + 1.5, circleCY + 2.0),
+      R,
+      Paint()
+        ..color = Colors.black.withValues(alpha: 0.25)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3.5),
+    );
+    canvas.drawCircle(Offset(cx, circleCY), R, Paint()..color = ringColor);
+    canvas.drawCircle(Offset(cx, circleCY), innerR, Paint()..color = Colors.white);
+
+    final emojiPainter = TextPainter(
+      text: TextSpan(text: emoji, style: const TextStyle(fontSize: 22)),
+      textDirection: TextDirection.ltr,
+    );
+    emojiPainter.layout();
+    emojiPainter.paint(canvas, Offset(cx - emojiPainter.width / 2, circleCY - emojiPainter.height / 2));
 
     final picture = recorder.endRecording();
-    final image = await picture.toImage(
-      ((bubbleWidth + 4) * devicePixelRatio).toInt(),
-      ((bubbleHeight + tailHeight + 4) * devicePixelRatio).toInt(),
+    final img = await picture.toImage(
+      (imgW * devicePixelRatio).toInt(),
+      (imgH * devicePixelRatio).toInt(),
     );
-    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+    final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
     return byteData!.buffer.asUint8List();
   }
 
-  /// Vẽ bong bóng đánh dấu Điểm Đến (Màu đỏ, biểu tượng 📍)
-  static Future<Uint8List> buildDestinationBubble({
-    required String label,
+  static Future<Uint8List> buildDestinationPin({
     double devicePixelRatio = 3.0,
-  }) {
-    return buildBubble(
-      emoji: '📍',
-      label: label.length > 14 ? '${label.substring(0, 14)}…' : label,
-      color: Colors.red.shade600,
-      devicePixelRatio: devicePixelRatio,
+  }) async {
+    const double R = 24.0;
+    const double dotR = 7.5;
+    const double tailH = 20.0;
+    const double pad = 10.0;
+    const double imgW = R * 2 + pad * 2;
+    const double imgH = pad + R * 2 + tailH;
+    const double cx = imgW / 2;
+    const double cy = pad + R;
+    const double tipY = imgH;
+    const Color red = Color(0xFFEA4335);
+    const Color dot = Color(0xFF8B0000);
+
+    final double d = R + tailH;
+    final double hw = R * sqrt(d * d - R * R) / d;
+    final double baseY = cy + R * R / d;
+
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    canvas.scale(devicePixelRatio);
+
+    final path = Path()
+      ..moveTo(cx, tipY)
+      ..lineTo(cx - hw, baseY)
+      ..arcToPoint(
+        Offset(cx + hw, baseY),
+        radius: Radius.circular(R),
+        largeArc: true,
+        clockwise: true,
+      )
+      ..close();
+    canvas.drawPath(path, Paint()..color = red);
+    canvas.drawCircle(Offset(cx, cy), dotR, Paint()..color = dot);
+
+    final picture = recorder.endRecording();
+    final img = await picture.toImage(
+      (imgW * devicePixelRatio).toInt(),
+      (imgH * devicePixelRatio).toInt(),
     );
+    final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
+    return byteData!.buffer.asUint8List();
   }
 
-  /// Vẽ pin tròn dạng Apple Find My cho thành viên nhóm.
-  /// Viền màu theo vai trò, ảnh đại diện (placeholder: bóng người xám).
-  /// [avatarBytes]: ảnh thực từ login (để null dùng placeholder).
+  /// Mũi tên điều hướng xanh kiểu Google Maps — trỏ lên, xoay via iconRotate, anchor CENTER.
+  static Future<Uint8List> buildNavigationArrow({
+    double devicePixelRatio = 3.0,
+  }) async {
+    const double size = 56.0;
+    const double cx = size / 2;
+
+    final path = Path()
+      ..moveTo(cx, 5)
+      ..lineTo(cx + 20, 51)
+      ..lineTo(cx, 40)
+      ..lineTo(cx - 20, 51)
+      ..close();
+
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    canvas.scale(devicePixelRatio);
+
+    canvas.drawPath(
+      Path()..addPath(path, const Offset(1.5, 2.0)),
+      Paint()
+        ..color = Colors.black.withValues(alpha: 0.30)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4.0),
+    );
+    canvas.drawPath(
+      path,
+      Paint()
+        ..shader = ui.Gradient.linear(
+          const Offset(cx, 5), const Offset(cx, 51),
+          [const Color(0xFF1A73E8), const Color(0xFF1557B0)],
+        ),
+    );
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5
+        ..strokeJoin = StrokeJoin.round,
+    );
+
+    final picture = recorder.endRecording();
+    final img = await picture.toImage(
+      (size * devicePixelRatio).toInt(),
+      (size * devicePixelRatio).toInt(),
+    );
+    final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
+    return byteData!.buffer.asUint8List();
+  }
+
   static Future<Uint8List> buildMemberBubble({
-    required String name,
     required String role,
     ui.Image? avatarImage,
     double devicePixelRatio = 3.0,
   }) async {
     const double R = 26.0;
-    const double border = 3.5;
-    const double innerR = R - border;
-    const double tailH = 14.0;
-    const double tailW = 13.0;
-    const double topPad = 4.0;
-    const double sidePad = 4.0;
+    const double innerR = 19.0;
+    const double tailH = 22.0;
+    const double topPad = 10.0;
+    const double sidePad = 8.0;
     const double imgW = R * 2 + sidePad * 2;
     const double imgH = topPad + R * 2 + tailH;
     const double cx = imgW / 2;
     const double cy = topPad + R;
+    const double tipY = imgH;
+
+    Color baseColor;
+    switch (role.toLowerCase()) {
+      case 'leader':
+        baseColor = const Color(0xFF2196F3);
+        break;
+      case 'sweeper':
+        baseColor = const Color(0xFF4CAF50);
+        break;
+      default:
+        baseColor = const Color(0xFFFF9800);
+    }
+
+    final pinPath = Path()
+      ..moveTo(cx, tipY)
+      ..cubicTo(cx - R * 0.25, tipY - tailH * 0.4, cx - R, cy + R * 0.65, cx - R, cy)
+      ..arcToPoint(Offset(cx + R, cy), radius: Radius.circular(R), clockwise: false)
+      ..cubicTo(cx + R, cy + R * 0.65, cx + R * 0.25, tipY - tailH * 0.4, cx, tipY)
+      ..close();
 
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
     canvas.scale(devicePixelRatio);
 
-    Color borderColor;
-    switch (role.toLowerCase()) {
-      case 'leader':  borderColor = const Color(0xFF1F4E79); break;
-      case 'sweeper': borderColor = const Color(0xFF2E7D32); break;
-      default:        borderColor = const Color(0xFFF57C00);
-    }
+    canvas.drawPath(pinPath, Paint()..color = baseColor);
 
-    // 1. Shadow
-    final shadowPaint = Paint()
-      ..color = Colors.black.withOpacity(0.28)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4.0);
-    canvas.drawCircle(Offset(cx + 1, cy + 1), R, shadowPaint);
-    canvas.drawPath(
-      Path()
-        ..moveTo(cx - tailW / 2, cy + R - 5)
-        ..lineTo(cx + 1, imgH)
-        ..lineTo(cx + tailW / 2, cy + R - 5)
-        ..close(),
-      shadowPaint,
-    );
-
-    // 2. Viền màu role (circle + tail cùng màu liền mạch)
-    final borderPaint = Paint()..color = borderColor;
-    canvas.drawCircle(Offset(cx, cy), R, borderPaint);
-    canvas.drawPath(
-      Path()
-        ..moveTo(cx - tailW / 2, cy + R - 5)
-        ..lineTo(cx, imgH)
-        ..lineTo(cx + tailW / 2, cy + R - 5)
-        ..close(),
-      borderPaint,
-    );
-
-    // 3. Nền ảnh đại diện
     canvas.save();
     canvas.clipPath(Path()..addOval(Rect.fromCircle(center: Offset(cx, cy), radius: innerR)));
-
     if (avatarImage != null) {
-      // Ảnh thực: scale + center crop vào vòng tròn
-      final src = Rect.fromLTWH(0, 0, avatarImage.width.toDouble(), avatarImage.height.toDouble());
-      final dst = Rect.fromCircle(center: Offset(cx, cy), radius: innerR);
-      canvas.drawImageRect(avatarImage, src, dst, Paint());
+      canvas.drawImageRect(
+        avatarImage,
+        Rect.fromLTWH(0, 0, avatarImage.width.toDouble(), avatarImage.height.toDouble()),
+        Rect.fromCircle(center: Offset(cx, cy), radius: innerR),
+        Paint(),
+      );
     } else {
-      // Placeholder: nền xám + bóng người
-      canvas.drawCircle(Offset(cx, cy), innerR, Paint()..color = const Color(0xFFEEEEEE));
-      final personPaint = Paint()..color = const Color(0xFF9E9E9E);
-      // Đầu
-      canvas.drawCircle(Offset(cx, cy - innerR * 0.18), innerR * 0.34, personPaint);
-      // Thân/vai
+      canvas.drawCircle(Offset(cx, cy), innerR, Paint()..color = Colors.white);
+      final grey = Paint()..color = const Color(0xFF9E9E9E);
+      canvas.drawCircle(Offset(cx, cy - innerR * 0.18), innerR * 0.38, grey);
       canvas.drawOval(
-        Rect.fromCenter(
-          center: Offset(cx, cy + innerR * 0.62),
-          width: innerR * 1.5,
-          height: innerR * 1.1,
-        ),
-        personPaint,
+        Rect.fromCenter(center: Offset(cx, cy + innerR * 0.60), width: innerR * 1.6, height: innerR * 1.1),
+        grey,
       );
     }
-
     canvas.restore();
 
-    // 4. Viền trắng mỏng bên trong để tách avatar với border màu
     canvas.drawCircle(
       Offset(cx, cy),
       innerR,
       Paint()
         ..color = Colors.white
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.5,
+        ..strokeWidth = 2.5,
     );
 
     final picture = recorder.endRecording();
-    final image = await picture.toImage(
+    final img = await picture.toImage(
       (imgW * devicePixelRatio).toInt(),
       (imgH * devicePixelRatio).toInt(),
     );
-    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+    final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
     return byteData!.buffer.asUint8List();
   }
 }
