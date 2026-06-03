@@ -17,6 +17,12 @@ class MapStateProvider extends ChangeNotifier {
 
   bool get isMapReady => _mapboxMap != null && _pointManager != null && _polylineManager != null;
 
+  bool _groupModeActive = false;
+  bool get isGroupModeActive => _groupModeActive;
+  void setGroupMode(bool active) {
+    _groupModeActive = active;
+  }
+
   List<dynamic> availableRoutes = [];
   int selectedRouteIndex = 0;
   bool isNavigating = false;
@@ -259,10 +265,9 @@ class MapStateProvider extends ChangeNotifier {
     for (final entry in locations.entries) {
       final uid = entry.key;
       final pos = entry.value;
-      final name = displayNames[uid] ?? uid.substring(0, 6);
       final role = roles[uid] ?? 'member';
 
-      final image = await MarkerBuilder.buildMemberBubble(name: name, role: role);
+      final image = await MarkerBuilder.buildMemberBubble(name: '', role: role);
       final annotation = await _pointManager!.create(
         mapbox.PointAnnotationOptions(
           geometry: mapbox.Point(coordinates: pos),

@@ -23,12 +23,6 @@ class MainShellScreen extends StatefulWidget {
 class _MainShellScreenState extends State<MainShellScreen> {
   int _currentIndex = 0;
 
-  final List<Widget> _screens = [
-    const SafeArea(child: RoutingPanel()),
-    const RoomLobbyScreen(),
-    const SafeArea(child: SosScreen()),
-  ];
-
   @override
   void initState() {
     super.initState();
@@ -111,24 +105,42 @@ class _MainShellScreenState extends State<MainShellScreen> {
           ),
         ),
       ],
-      child: Scaffold(
-        body: Stack(
-          children: [
-            const MainMapScreen(),
-            ...List.generate(_screens.length, (i) => AnimatedOpacity(
-              opacity: i == _currentIndex ? 1.0 : 0.0,
-              duration: const Duration(milliseconds: 150),
-              child: IgnorePointer(
-                ignoring: i != _currentIndex,
-                child: _screens[i],
-              ),
-            )),
-          ],
-        ),
-        bottomNavigationBar: NavigationBar(
+      child: Builder(builder: (ctx) {
+        final screens = [
+          SafeArea(child: RoutingPanel(isActive: _currentIndex == 0)),
+          const RoomLobbyScreen(),
+          const SafeArea(child: SosScreen()),
+        ];
+        return Scaffold(
+          body: Stack(
+            children: [
+              const MainMapScreen(),
+              ...List.generate(screens.length, (i) => AnimatedOpacity(
+                opacity: i == _currentIndex ? 1.0 : 0.0,
+                duration: const Duration(milliseconds: 150),
+                child: IgnorePointer(
+                  ignoring: i != _currentIndex,
+                  child: screens[i],
+                ),
+              )),
+            ],
+          ),
+          bottomNavigationBar: NavigationBar(
           selectedIndex: _currentIndex,
-          onDestinationSelected: (index) =>
-              setState(() => _currentIndex = index),
+          onDestinationSelected: (index) {
+            if (index == _currentIndex) return;
+            if (_currentIndex == 1 && ctx.read<MapStateProvider>().isGroupModeActive) {
+              ScaffoldMessenger.of(ctx).showSnackBar(
+                const SnackBar(
+                  content: Text('Vui lòng rời phòng trước khi chuyển tab'),
+                  backgroundColor: Colors.orange,
+                  duration: Duration(seconds: 2),
+                ),
+              );
+              return;
+            }
+            setState(() => _currentIndex = index);
+          },
           backgroundColor: Colors.white,
           indicatorColor: Colors.blue.withValues(alpha: 0.12),
           destinations: const [
@@ -148,8 +160,9 @@ class _MainShellScreenState extends State<MainShellScreen> {
               label: 'SOS',
             ),
           ],
-        ),
-      ),
+          ),
+        );
+      }),
     );
   }
 }

@@ -49,10 +49,13 @@ class MarkerBuilder {
     );
 
     // 3. Vẽ cái đuôi nhọn trỏ xuống điểm trên bản đồ
+    // tailCenterX canh theo tâm ảnh (bubbleWidth + 4) / 2, không theo tâm bubble
+    // để iconAnchor: BOTTOM ghim đúng đầu mũi nhọn vào tọa độ
     final tailPath = Path();
-    final tailCenterX = bubbleWidth / 2;
+    final tailCenterX = (bubbleWidth + 4) / 2;
+    const double imageHeight = bubbleHeight + tailHeight + 4;
     tailPath.moveTo(tailCenterX - tailWidth / 2, bubbleHeight - 1);
-    tailPath.lineTo(tailCenterX, bubbleHeight + tailHeight);
+    tailPath.lineTo(tailCenterX, imageHeight);
     tailPath.lineTo(tailCenterX + tailWidth / 2, bubbleHeight - 1);
     tailPath.close();
     canvas.drawPath(tailPath, bgPaint);
@@ -158,11 +161,12 @@ class MarkerBuilder {
       borderPaint,
     );
 
-    // Vẽ đuôi
+    // Vẽ đuôi — canh tâm theo ảnh, tip tại đáy ảnh để iconAnchor: BOTTOM chính xác
     final tailPath = Path();
-    final tailCenterX = bubbleWidth / 2;
+    final tailCenterX = (bubbleWidth + 4) / 2;
+    const double imageHeight = bubbleHeight + tailHeight + 4;
     tailPath.moveTo(tailCenterX - tailWidth / 2, bubbleHeight - 1);
-    tailPath.lineTo(tailCenterX, bubbleHeight + tailHeight);
+    tailPath.lineTo(tailCenterX, imageHeight);
     tailPath.lineTo(tailCenterX + tailWidth / 2, bubbleHeight - 1);
     tailPath.close();
     canvas.drawPath(tailPath, bgPaint);
@@ -218,30 +222,108 @@ class MarkerBuilder {
     );
   }
 
-  /// Vẽ bong bóng đánh dấu Thành viên trong nhóm đi phượt (Biểu tượng 🛵)
-  /// Màu sắc tự động thay đổi theo vai trò: Leader(Xanh dương), Sweeper(Xanh lá), Member(Cam)
+  /// Vẽ pin tròn dạng Apple Find My cho thành viên nhóm.
+  /// Viền màu theo vai trò, ảnh đại diện (placeholder: bóng người xám).
+  /// [avatarBytes]: ảnh thực từ login (để null dùng placeholder).
   static Future<Uint8List> buildMemberBubble({
     required String name,
     required String role,
+    ui.Image? avatarImage,
     double devicePixelRatio = 3.0,
-  }) {
-    Color color;
-    switch (role) {
-      case 'Leader':
-        color = const Color(0xFF1F4E79); // Xanh dương đậm
-        break;
-      case 'Sweeper': // Chốt đoàn
-        color = const Color(0xFF2E7D32); // Xanh lá cây
-        break;
-      default:
-        color = const Color(0xFFF57C00); // Màu cam cho thành viên thường
+  }) async {
+    const double R = 26.0;
+    const double border = 3.5;
+    const double innerR = R - border;
+    const double tailH = 14.0;
+    const double tailW = 13.0;
+    const double topPad = 4.0;
+    const double sidePad = 4.0;
+    const double imgW = R * 2 + sidePad * 2;
+    const double imgH = topPad + R * 2 + tailH;
+    const double cx = imgW / 2;
+    const double cy = topPad + R;
+
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    canvas.scale(devicePixelRatio);
+
+    Color borderColor;
+    switch (role.toLowerCase()) {
+      case 'leader':  borderColor = const Color(0xFF1F4E79); break;
+      case 'sweeper': borderColor = const Color(0xFF2E7D32); break;
+      default:        borderColor = const Color(0xFFF57C00);
     }
 
-    return buildBubble(
-      emoji: '🛵',
-      label: name.length > 10 ? '${name.substring(0, 10)}…' : name,
-      color: color,
-      devicePixelRatio: devicePixelRatio,
+    // 1. Shadow
+    final shadowPaint = Paint()
+      ..color = Colors.black.withOpacity(0.28)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4.0);
+    canvas.drawCircle(Offset(cx + 1, cy + 1), R, shadowPaint);
+    canvas.drawPath(
+      Path()
+        ..moveTo(cx - tailW / 2, cy + R - 5)
+        ..lineTo(cx + 1, imgH)
+        ..lineTo(cx + tailW / 2, cy + R - 5)
+        ..close(),
+      shadowPaint,
     );
+
+    // 2. Viền màu role (circle + tail cùng màu liền mạch)
+    final borderPaint = Paint()..color = borderColor;
+    canvas.drawCircle(Offset(cx, cy), R, borderPaint);
+    canvas.drawPath(
+      Path()
+        ..moveTo(cx - tailW / 2, cy + R - 5)
+        ..lineTo(cx, imgH)
+        ..lineTo(cx + tailW / 2, cy + R - 5)
+        ..close(),
+      borderPaint,
+    );
+
+    // 3. Nền ảnh đại diện
+    canvas.save();
+    canvas.clipPath(Path()..addOval(Rect.fromCircle(center: Offset(cx, cy), radius: innerR)));
+
+    if (avatarImage != null) {
+      // Ảnh thực: scale + center crop vào vòng tròn
+      final src = Rect.fromLTWH(0, 0, avatarImage.width.toDouble(), avatarImage.height.toDouble());
+      final dst = Rect.fromCircle(center: Offset(cx, cy), radius: innerR);
+      canvas.drawImageRect(avatarImage, src, dst, Paint());
+    } else {
+      // Placeholder: nền xám + bóng người
+      canvas.drawCircle(Offset(cx, cy), innerR, Paint()..color = const Color(0xFFEEEEEE));
+      final personPaint = Paint()..color = const Color(0xFF9E9E9E);
+      // Đầu
+      canvas.drawCircle(Offset(cx, cy - innerR * 0.18), innerR * 0.34, personPaint);
+      // Thân/vai
+      canvas.drawOval(
+        Rect.fromCenter(
+          center: Offset(cx, cy + innerR * 0.62),
+          width: innerR * 1.5,
+          height: innerR * 1.1,
+        ),
+        personPaint,
+      );
+    }
+
+    canvas.restore();
+
+    // 4. Viền trắng mỏng bên trong để tách avatar với border màu
+    canvas.drawCircle(
+      Offset(cx, cy),
+      innerR,
+      Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5,
+    );
+
+    final picture = recorder.endRecording();
+    final image = await picture.toImage(
+      (imgW * devicePixelRatio).toInt(),
+      (imgH * devicePixelRatio).toInt(),
+    );
+    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+    return byteData!.buffer.asUint8List();
   }
 }

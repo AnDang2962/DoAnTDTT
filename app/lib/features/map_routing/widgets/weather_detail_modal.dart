@@ -20,6 +20,18 @@ class WeatherDetailModal extends StatelessWidget {
   bool _isDangerous(WarningMarker w) =>
       w.subtype == 'storm' || w.subtype == 'rain' || w.subtype == 'fog';
 
+  String _subtypeLabel(String subtype) {
+    const labels = {
+      'storm': 'Có bão',
+      'rain': 'Đang mưa',
+      'fog': 'Có sương mù',
+      'snow': 'Có tuyết',
+      'cloudy': 'Nhiều mây',
+      'sunny': 'Nắng đẹp',
+    };
+    return labels[subtype] ?? 'Thời tiết khác';
+  }
+
   @override
   Widget build(BuildContext context) {
     return DraggableScrollableSheet(
@@ -59,17 +71,18 @@ class WeatherDetailModal extends StatelessWidget {
                     separatorBuilder: (_, _) => const Divider(height: 1),
                     itemBuilder: (_, i) {
                       final w = warnings[i];
-                      final kmLabel = 'Km ${(i + 1) * 50}';
+                      final km = w.progressKm > 0 ? w.progressKm.toInt() : (i + 1) * 50;
                       final dangerous = _isDangerous(w);
                       return ListTile(
                         leading: Text(w.emoji, style: const TextStyle(fontSize: 28)),
                         title: Text(
-                          '📍 $kmLabel: ${w.vi}',
+                          'Km $km: ${_subtypeLabel(w.subtype)}',
                           style: TextStyle(
                             fontWeight: FontWeight.w600,
                             color: dangerous ? Colors.red[700] : Colors.black87,
                           ),
                         ),
+                        subtitle: Text(w.vi, style: const TextStyle(color: Colors.grey)),
                         trailing: dangerous
                             ? const Icon(Icons.warning_amber_rounded, color: Colors.red)
                             : null,

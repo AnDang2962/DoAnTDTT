@@ -21,8 +21,9 @@ import '../../voice/services/voice_action_dispatcher.dart';
 
 class RoutingPanel extends StatefulWidget {
   final String? roomId;
+  final bool isActive;
 
-  const RoutingPanel({super.key, this.roomId});
+  const RoutingPanel({super.key, this.roomId, this.isActive = true});
 
   @override
   State<RoutingPanel> createState() => _RoutingPanelState();
@@ -49,17 +50,39 @@ class _RoutingPanelState extends State<RoutingPanel> {
   /// Gộp 2 nguồn risk (dedup theo id) và vẽ 1 lần duy nhất.
   void _redrawAllRisks() {
     if (!mounted) return;
+    final mapProvider = context.read<MapStateProvider>();
+    if (mapProvider.isGroupModeActive) return;
     final merged = <String, WarningMarker>{};
     for (final r in _realtimeRisks) merged[r.id] = r;
-    // Cross-group ghi đè nếu trùng id (có severity chính xác hơn)
     for (final r in _crossGroupRisks) merged[r.id] = r;
-    context.read<MapStateProvider>().drawRiskMarkers(merged.values.toList(), {});
+    mapProvider.drawRiskMarkers(merged.values.toList(), {});
   }
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _startSoloRiskListener());
+  }
+
+  @override
+  void didUpdateWidget(RoutingPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!widget.isActive && oldWidget.isActive) {
+      _stopNavGpsStream();
+      _riskRefreshTimer?.cancel();
+      if (mounted) {
+        final mapProvider = context.read<MapStateProvider>();
+        if (mapProvider.isNavigating) {
+          unawaited(mapProvider.clearAll());
+          mapProvider.clearRoutes();
+          setState(() {
+            _previewDestPos = null;
+            _routeDistance = 0.0;
+            _routeDurationMins = 0;
+          });
+        }
+      }
+    }
   }
 
   void _startSoloRiskListener() {
@@ -215,8 +238,12 @@ class _RoutingPanelState extends State<RoutingPanel> {
         _showToast("Đang phân tích thời tiết trên lộ trình...");
         List<WarningMarker> weatherWarnings = [];
 
-        for (var pt in matchPoints) {
-          final warning = await WeatherApi.checkWeatherRisk(pt.lat.toDouble(), pt.lng.toDouble());
+        for (int i = 0; i < matchPoints.length; i++) {
+          final warning = await WeatherApi.checkWeatherRisk(
+            matchPoints[i].lat.toDouble(),
+            matchPoints[i].lng.toDouble(),
+            progressKm: (i + 1) * 50.0,
+          );
           if (warning != null) weatherWarnings.add(warning);
         }
 

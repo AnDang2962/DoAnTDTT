@@ -1,5 +1,8 @@
 import 'dart:async' show unawaited;
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mapbox;
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -11,6 +14,7 @@ import '../../../features/map_routing/services/places_api.dart';
 import '../../../features/map_routing/widgets/nearby_places_modal.dart';
 import '../../../features/map_routing/widgets/weather_detail_modal.dart';
 import '../../../features/group_radar/widgets/group_status_sheet.dart';
+import '../../../data/models/warning_marker.dart';
 
 typedef OnNavigateTo = Future<void> Function(mapbox.Position dest, String name);
 
@@ -24,6 +28,9 @@ class VoiceActionDispatcher {
   final Map<String, dynamic> memberInfo;
   final String currentUserId;
   final OnNavigateTo? onNavigateTo;
+  final bool isTooFar;
+  final List<Map<String, dynamic>> gapDetails;
+  final List<Map<String, dynamic>> offRouteWarnings;
 
   final _sos = SosService();
   final _tts = TtsService();
@@ -38,6 +45,9 @@ class VoiceActionDispatcher {
     this.memberInfo = const {},
     this.currentUserId = '',
     this.onNavigateTo,
+    this.isTooFar = false,
+    this.gapDetails = const [],
+    this.offRouteWarnings = const [],
   });
 
   Future<void> dispatch(Map<String, dynamic> result) async {
@@ -119,14 +129,59 @@ class VoiceActionDispatcher {
     }
 
     final warnings = mapProvider.weatherWarnings;
-    final summary = warnings.isEmpty
-        ? 'Chưa có dữ liệu thời tiết trên lộ trình.'
-        : 'Có ${warnings.length} điểm thời tiết. '
-          '${warnings.any((w) => w.subtype == "storm" || w.subtype == "rain") ? "Cảnh báo có mưa hoặc bão trên đường." : "Thời tiết ổn định."}';
+    final ttsText = await _buildWeatherTTS(warnings);
 
     if (!context.mounted) return;
-    unawaited(_tts.speak(responseText.isNotEmpty ? responseText : summary));
+    unawaited(_tts.speak(ttsText));
     await WeatherDetailModal.show(context, warnings);
+  }
+
+  Future<String> _buildWeatherTTS(List<WarningMarker> warnings) async {
+    if (warnings.isEmpty) return 'Thời tiết dọc tuyến ổn định, không có cảnh báo.';
+
+    final parts = <String>[];
+    for (int i = 0; i < warnings.length; i++) {
+      final w = warnings[i];
+      if (w.subtype != 'storm' && w.subtype != 'rain' && w.subtype != 'fog') continue;
+      final locationName = await _reverseGeocode(w.lat, w.lng);
+      final location = locationName.isNotEmpty
+          ? 'tại $locationName'
+          : 'tại km ${w.progressKm > 0 ? w.progressKm.toInt() : (i + 1) * 50}';
+      parts.add('$location ${_subtypeToTTS(w.subtype)}');
+    }
+    if (parts.isEmpty) return 'Thời tiết dọc tuyến ổn định.';
+    return 'Cảnh báo thời tiết: ${parts.join(", ")}.';
+  }
+
+  Future<String> _reverseGeocode(double lat, double lng) async {
+    try {
+      final token = dotenv.env['MAPBOX_PUBLIC_KEY'] ?? '';
+      if (token.isEmpty) return '';
+      final uri = Uri.parse(
+        'https://api.mapbox.com/geocoding/v5/mapbox.places/$lng,$lat.json'
+        '?types=place,district,locality&language=vi&access_token=$token',
+      );
+      final res = await http.get(uri).timeout(const Duration(seconds: 5));
+      if (res.statusCode != 200) return '';
+      final data = json.decode(res.body) as Map<String, dynamic>;
+      final features = data['features'] as List?;
+      if (features == null || features.isEmpty) return '';
+      return features.first['text']?.toString() ?? '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  String _subtypeToTTS(String subtype) {
+    const map = {
+      'storm': 'có bão',
+      'rain': 'đang mưa',
+      'fog': 'có sương mù',
+      'snow': 'có tuyết',
+      'cloudy': 'nhiều mây',
+      'sunny': 'nắng đẹp',
+    };
+    return map[subtype] ?? 'thời tiết bất thường';
   }
 
   Future<void> _handleCheckGroupStatus(String responseText) async {
@@ -141,16 +196,39 @@ class VoiceActionDispatcher {
     context.read<MapStateProvider>().fitBoundsToPositions(memberLocations.values.toList());
 
     if (!context.mounted) return;
-    final ttsText = responseText.isNotEmpty
-        ? responseText
-        : 'Nhóm có ${memberLocations.length} thành viên.';
+    final ttsText = _buildGroupStatusTTS();
     unawaited(_tts.speak(ttsText));
     await GroupStatusSheet.show(
       context,
       memberLocations: memberLocations,
       memberInfo: memberInfo,
       currentUserId: currentUserId,
+      isTooFar: isTooFar,
+      gapDetails: gapDetails,
+      offRouteWarnings: offRouteWarnings,
     );
+  }
+
+  String _buildGroupStatusTTS() {
+    final count = memberLocations.length;
+    if (!isTooFar && offRouteWarnings.isEmpty) {
+      return 'Đội hình ổn định, có $count thành viên.';
+    }
+    final parts = <String>[];
+    for (final g in gapDetails) {
+      final uid = g['memberId']?.toString() ?? '';
+      final name = (memberInfo[uid] as Map?)?['displayName']?.toString()
+          ?? (uid.length >= 6 ? uid.substring(0, 6) : uid);
+      final km = (g['distanceKm'] as num?)?.toStringAsFixed(1) ?? '?';
+      parts.add('$name tụt hậu $km ki lô mét');
+    }
+    for (final w in offRouteWarnings) {
+      final uid = w['memberId']?.toString() ?? '';
+      final name = (memberInfo[uid] as Map?)?['displayName']?.toString()
+          ?? (uid.length >= 6 ? uid.substring(0, 6) : uid);
+      parts.add('$name đã lệch tuyến đường');
+    }
+    return 'Cảnh báo đội hình: ${parts.join(", ")}.';
   }
 
   Future<void> _handleFindNearby({

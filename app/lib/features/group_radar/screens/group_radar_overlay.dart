@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:geolocator/geolocator.dart';
@@ -54,6 +55,8 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
   Map<String, dynamic> _memberInfo = {};
   Map<String, mapbox.Position> _memberLocations = {};
 
+  String? _loadedRouteKey;
+
   bool _isTooFar = false;
   List<Map<String, dynamic>> _gapDetails = [];
   List<Map<String, dynamic>> _offRouteWarnings = [];
@@ -64,6 +67,9 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) context.read<MapStateProvider>().setGroupMode(true);
+    });
     _startMyGpsTracker();
     _listenToFirebaseStreams();
   }
@@ -112,6 +118,9 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
                 ))
             .toList();
 
+        // Tạo key từ điểm đầu + cuối để phát hiện route mới
+        final routeKey = coords.isEmpty ? '' : '${coords.first.lng},${coords.first.lat}-${coords.last.lng},${coords.last.lat}';
+
         if (mounted) {
           final mapProvider = context.read<MapStateProvider>();
           mapProvider.setFullRoute(coords);
@@ -121,6 +130,23 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
           if (coords.isNotEmpty) {
             await mapProvider.drawDestinationMarker(coords.last, endName);
           }
+
+          // Load risk + thời tiết khi route mới (member join sau hoặc leader đổi tuyến)
+          if (routeKey != _loadedRouteKey) {
+            _loadedRouteKey = routeKey;
+            final polylineData = polyList
+                .map<Map<String, double>>((p) => {
+                      'lng': (p['lng'] as num).toDouble(),
+                      'lat': (p['lat'] as num).toDouble(),
+                    })
+                .toList();
+            _crossGroupRisks = await _warningRepo.getRiskLabelsNearRoute(
+              polyline: polylineData,
+            );
+            _redrawAllRisks();
+            _startCrossGroupRiskTimer(polylineData);
+            await _loadWeatherAlongRoute(coords);
+          }
         }
       }
     });
@@ -129,12 +155,10 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
       final newLocations = <String, mapbox.Position>{};
       data.forEach((uid, info) {
         if (info is Map && info['lat'] != null && info['lng'] != null) {
-          if (uid != widget.currentUser.id) {
-            newLocations[uid] = mapbox.Position(
-              (info['lng'] as num).toDouble(),
-              (info['lat'] as num).toDouble(),
-            );
-          }
+          newLocations[uid] = mapbox.Position(
+            (info['lng'] as num).toDouble(),
+            (info['lat'] as num).toDouble(),
+          );
         }
       });
       _memberLocations = newLocations;
@@ -245,10 +269,11 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
     final waypoints = RouteUtils.extractWaypointsEvery50Km(coords);
     final weatherWarnings = <WarningMarker>[];
 
-    for (final pt in waypoints) {
+    for (int i = 0; i < waypoints.length; i++) {
       final warning = await WeatherApi.checkWeatherRisk(
-        pt.lat.toDouble(),
-        pt.lng.toDouble(),
+        waypoints[i].lat.toDouble(),
+        waypoints[i].lng.toDouble(),
+        progressKm: (i + 1) * 50.0,
       );
       if (warning != null) weatherWarnings.add(warning);
     }
@@ -289,6 +314,9 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
       onNavigateTo: widget.currentUser.role == UserRole.leader
           ? (pos, name) async => _handleDestinationSelected(pos, name)
           : null,
+      isTooFar: _isTooFar,
+      gapDetails: _gapDetails,
+      offRouteWarnings: _offRouteWarnings,
     ).dispatch(result);
   }
 
@@ -360,6 +388,9 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
     _memberLocationsSub?.cancel();
     _warningsSub?.cancel();
     _riskRefreshTimer?.cancel();
+    FirebaseDatabase.instance
+        .ref('gps/${widget.roomId}/${widget.currentUser.id}')
+        .remove();
     super.dispose();
   }
 

@@ -6,12 +6,18 @@ class GroupStatusSheet extends StatelessWidget {
   final Map<String, mapbox.Position> memberLocations;
   final Map<String, dynamic> memberInfo;
   final String currentUserId;
+  final bool isTooFar;
+  final List<Map<String, dynamic>> gapDetails;
+  final List<Map<String, dynamic>> offRouteWarnings;
 
   const GroupStatusSheet({
     super.key,
     required this.memberLocations,
     required this.memberInfo,
     required this.currentUserId,
+    this.isTooFar = false,
+    this.gapDetails = const [],
+    this.offRouteWarnings = const [],
   });
 
   static Future<void> show(
@@ -19,6 +25,9 @@ class GroupStatusSheet extends StatelessWidget {
     required Map<String, mapbox.Position> memberLocations,
     required Map<String, dynamic> memberInfo,
     required String currentUserId,
+    bool isTooFar = false,
+    List<Map<String, dynamic>> gapDetails = const [],
+    List<Map<String, dynamic>> offRouteWarnings = const [],
   }) {
     return showModalBottomSheet(
       context: context,
@@ -30,6 +39,9 @@ class GroupStatusSheet extends StatelessWidget {
         memberLocations: memberLocations,
         memberInfo: memberInfo,
         currentUserId: currentUserId,
+        isTooFar: isTooFar,
+        gapDetails: gapDetails,
+        offRouteWarnings: offRouteWarnings,
       ),
     );
   }
@@ -68,6 +80,59 @@ class GroupStatusSheet extends StatelessWidget {
             'Đoàn (${members.length} thành viên)',
             style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
           ),
+          const SizedBox(height: 12),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: isTooFar ? Colors.red[50] : Colors.green[50],
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: isTooFar ? Colors.red[300]! : Colors.green[300]!,
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        isTooFar ? Icons.gpp_bad : Icons.verified_user,
+                        color: isTooFar ? Colors.red[700] : Colors.green[700],
+                        size: 18,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        isTooFar ? 'Đội hình đứt đoạn' : 'Đội hình ổn định',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: isTooFar ? Colors.red[700] : Colors.green[700],
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (isTooFar) ...[
+                    const SizedBox(height: 6),
+                    ...gapDetails.map((g) {
+                      final uid = g['memberId']?.toString() ?? '';
+                      final name = (memberInfo[uid] as Map?)?['displayName']?.toString() ?? uid.substring(0, 6);
+                      final km = (g['distanceKm'] as num?)?.toStringAsFixed(1) ?? '?';
+                      return Text('• $name tụt hậu $km km',
+                          style: TextStyle(fontSize: 13, color: Colors.red[700]));
+                    }),
+                    ...offRouteWarnings.map((w) {
+                      final uid = w['memberId']?.toString() ?? '';
+                      final name = (memberInfo[uid] as Map?)?['displayName']?.toString() ?? uid.substring(0, 6);
+                      return Text('• $name đã lệch tuyến đường',
+                          style: TextStyle(fontSize: 13, color: Colors.red[700]));
+                    }),
+                  ],
+                ],
+              ),
+            ),
+          ),
           const SizedBox(height: 8),
           Expanded(
             child: ListView.separated(
@@ -79,7 +144,7 @@ class GroupStatusSheet extends StatelessWidget {
                 final uid = members[i].key;
                 final pos = members[i].value;
                 final info = memberInfo[uid] as Map? ?? {};
-                final name = info['name']?.toString() ?? uid.substring(0, 6);
+                final name = info['displayName']?.toString() ?? uid.substring(0, 6);
                 final role = info['role']?.toString() ?? 'member';
                 final isMe = uid == currentUserId;
 

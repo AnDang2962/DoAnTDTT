@@ -94,6 +94,7 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
     }
 
     if (!mounted) return;
+    context.read<MapStateProvider>().setGroupMode(false);
     context.read<MapStateProvider>().clearAll();
     context.read<MembersProvider>().updateRoomIdForSOS('');
     setState(() {

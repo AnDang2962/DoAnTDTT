@@ -22,7 +22,7 @@ class WeatherApi {
   ///     isDangerous: boolean,
   ///     rawCode: number,         // OpenWeatherMap weather ID (200-804)
   ///   }
-  static Future<WarningMarker?> checkWeatherRisk(double lat, double lng) async {
+  static Future<WarningMarker?> checkWeatherRisk(double lat, double lng, {double progressKm = 0.0}) async {
     try {
       final result = await backendFunctions
           .httpsCallable('getWeatherAlongRoute')
@@ -54,22 +54,21 @@ class WeatherApi {
         subtype = 'cloudy';
       }
 
-      // Display gọn: "32.5°C • 💧 75%"
-      String shortText = '${tempC.toStringAsFixed(1)}°C • 💧 $humidity%';
+      final tempDisplay = '${tempC.toStringAsFixed(1)}°C • 💧 $humidity%';
 
       return WarningMarker(
         id: 'weather_${DateTime.now().millisecondsSinceEpoch}',
         category: 'WEATHER',
         subtype: subtype,
-        vi: shortText,
+        vi: tempDisplay,
         severity: 0.1,
         baseSeverity: 0.1,
         lat: lat,
         lng: lng,
-        note: 'Trạm thời tiết 50km',
+        note: description,
         createdAtMs: DateTime.now().millisecondsSinceEpoch,
         distanceFromRouteKm: 0.0,
-        progressKm: 0.0,
+        progressKm: progressKm,
       );
     } on FirebaseFunctionsException catch (e) {
       debugPrint('[WeatherApi] ✗ Backend error: ${e.code} - ${e.message}');

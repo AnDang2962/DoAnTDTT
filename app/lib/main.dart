@@ -25,7 +25,7 @@ import 'package:route_mate_app/core/services/solo_room_service.dart';
 ///   - Release + emulator (cho demo 2 máy thật):
 ///     $ flutter run --release \
 ///         --dart-define=USE_EMULATOR=true \
-///         --dart-define=MAC_LAN_IP=192.168.1.3
+///         --dart-define=MAC_LAN_IP=192.168.1.29
 ///
 ///   - Production (sau này khi deploy backend):
 ///     $ flutter run --release
@@ -35,7 +35,7 @@ import 'package:route_mate_app/core/services/solo_room_service.dart';
 const bool _useEmulator =
     bool.fromEnvironment('USE_EMULATOR', defaultValue: kDebugMode);
 const String _macLanIp =
-    String.fromEnvironment('MAC_LAN_IP', defaultValue: '192.168.1.3');
+    String.fromEnvironment('MAC_LAN_IP', defaultValue: '192.168.1.29');
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
