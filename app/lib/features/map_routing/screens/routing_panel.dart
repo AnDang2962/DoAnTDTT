@@ -540,7 +540,17 @@ class _RoutingPanelState extends State<RoutingPanel> {
             bottom: 200,
             right: 16,
             child: GestureDetector(
-              onTap: () => context.read<MapStateProvider>().flyToCurrentLocation(),
+              onTap: () async {
+                final success = await context.read<MapStateProvider>().flyToCurrentLocation();
+                if (!success && mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Không thể lấy vị trí. Hãy bật GPS hoặc gửi vị trí giả lập nếu dùng máy ảo.'),
+                      backgroundColor: Colors.red,
+                    ),
+                  );
+                }
+              },
               child: Container(
                 width: 40,
                 height: 40,

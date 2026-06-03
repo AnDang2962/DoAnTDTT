@@ -6,6 +6,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mapbox;
 import 'package:cloud_functions/cloud_functions.dart';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../data/models/user_model.dart';
 import '../../../data/models/warning_marker.dart';
 import '../../../data/repositories/room_repository.dart';
@@ -18,6 +19,7 @@ import '../widgets/voice_fab.dart';
 import '../../../core/utils/route_utils.dart';
 import '../../map_routing/services/gemini_ai_api.dart';
 import '../../voice/services/voice_action_dispatcher.dart';
+import '../../../core/utils/badge_helper.dart';
 
 class GroupRadarOverlay extends StatefulWidget {
   final String roomId;
@@ -180,17 +182,51 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
     context.read<MapStateProvider>().drawRiskMarkers(merged.values.toList(), _memberLocations);
   }
 
-  void _updateMapMembers() {
+  Map<String, String?> _cachedAvatars = {};
+  Map<String, int> _cachedBadgeLevels = {};
+
+  void _updateMapMembers() async {
     if (!mounted) return;
     final displayNames = <String, String>{};
     final roles = <String, String>{};
-    _memberInfo.forEach((uid, info) {
+    final avatars = <String, String?>{};
+    final badgeLevels = <String, int>{};
+
+    for (var uid in _memberInfo.keys) {
+      final info = _memberInfo[uid];
       if (info is Map) {
         displayNames[uid] = info['displayName']?.toString() ?? 'User';
         roles[uid] = info['role']?.toString() ?? 'member';
       }
-    });
-    context.read<MapStateProvider>().drawMemberMarkers(_memberLocations, displayNames, roles);
+      
+      if (!_cachedAvatars.containsKey(uid)) {
+        try {
+          final doc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+          if (doc.exists) {
+            _cachedAvatars[uid] = doc.data()?['avatarUrl'];
+            final totalKm = (doc.data()?['totalKm'] as num?)?.toDouble() ?? 0.0;
+            _cachedBadgeLevels[uid] = BadgeHelper.getBadgeLevel(totalKm);
+          } else {
+            _cachedAvatars[uid] = null;
+            _cachedBadgeLevels[uid] = 0;
+          }
+        } catch (_) {
+          _cachedAvatars[uid] = null;
+          _cachedBadgeLevels[uid] = 0;
+        }
+      }
+      avatars[uid] = _cachedAvatars[uid];
+      badgeLevels[uid] = _cachedBadgeLevels[uid] ?? 0;
+    }
+
+    if (!mounted) return;
+    context.read<MapStateProvider>().drawMemberMarkers(
+      _memberLocations, 
+      displayNames, 
+      roles,
+      avatars,
+      badgeLevels,
+    );
   }
 
   void _checkFormationDistance() {

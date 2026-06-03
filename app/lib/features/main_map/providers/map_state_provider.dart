@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:math';
+import 'dart:ui' as ui;
+import 'package:http/http.dart' as http;
 import 'package:flutter/material.dart';
 import 'package:flutter_compass/flutter_compass.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mapbox;
@@ -176,12 +178,12 @@ class MapStateProvider extends ChangeNotifier {
     });
   }
 
-  Future<void> flyToCurrentLocation() async {
+  Future<bool> flyToCurrentLocation() async {
     _isFollowing = true;
     notifyListeners();
     try {
       final position = await LocationService().getCurrentPosition();
-      if (position == null) return;
+      if (position == null) return false;
       _mapboxMap?.flyTo(
         mapbox.CameraOptions(
           center: mapbox.Point(
@@ -193,8 +195,10 @@ class MapStateProvider extends ChangeNotifier {
         ),
         mapbox.MapAnimationOptions(duration: 800),
       );
+      return true;
     } catch (e) {
       debugPrint('[MapStateProvider] flyToCurrentLocation error: $e');
+      return false;
     }
   }
 
@@ -251,10 +255,28 @@ class MapStateProvider extends ChangeNotifier {
     flyTo(dest, zoom: 13.0);
   }
 
+  final Map<String, ui.Image> _avatarImageCache = {};
+
+  Future<ui.Image?> _loadAvatarImage(String url) async {
+    if (_avatarImageCache.containsKey(url)) return _avatarImageCache[url];
+    try {
+      // Need to import 'package:http/http.dart' as http;
+      final response = await http.get(Uri.parse(url));
+      final codec = await ui.instantiateImageCodec(response.bodyBytes);
+      final frame = await codec.getNextFrame();
+      _avatarImageCache[url] = frame.image;
+      return frame.image;
+    } catch (e) {
+      return null;
+    }
+  }
+
   Future<void> drawMemberMarkers(
     Map<String, mapbox.Position> locations,
     Map<String, String> displayNames,
     Map<String, String> roles,
+    Map<String, String?> avatars,
+    Map<String, int> badgeLevels,
   ) async {
     if (_pointManager == null) return;
     for (final m in _memberMarkers) {
@@ -266,8 +288,21 @@ class MapStateProvider extends ChangeNotifier {
       final uid = entry.key;
       final pos = entry.value;
       final role = roles[uid] ?? 'member';
+      final avatarUrl = avatars[uid];
+      final badgeLevel = badgeLevels[uid] ?? 0;
 
-      final image = await MarkerBuilder.buildMemberBubble(name: '', role: role);
+      ui.Image? avatarImg;
+      if (avatarUrl != null && avatarUrl.isNotEmpty) {
+        avatarImg = await _loadAvatarImage(avatarUrl);
+      }
+
+      final image = await MarkerBuilder.buildMemberBubble(
+        name: displayNames[uid] ?? '', 
+        role: role,
+        avatarImage: avatarImg,
+        badgeLevel: badgeLevel,
+      );
+      
       final annotation = await _pointManager!.create(
         mapbox.PointAnnotationOptions(
           geometry: mapbox.Point(coordinates: pos),

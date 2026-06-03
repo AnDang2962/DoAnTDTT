@@ -44,6 +44,8 @@ dependencies:
 
   # --- 6. GIAO DIỆN ---
   cupertino_icons: ^1.0.8
+  google_sign_in: ^6.2.2
+  shared_preferences: ^2.5.5
 
 dev_dependencies:
   flutter_test:
@@ -54,3 +56,4 @@ flutter:
   uses-material-design: true
   assets:
     - .env
+    - assets/images/

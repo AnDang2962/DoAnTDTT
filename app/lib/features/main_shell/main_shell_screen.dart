@@ -6,9 +6,12 @@ import 'package:route_mate_app/features/main_map/providers/map_state_provider.da
 import 'package:route_mate_app/features/group_radar/screens/room_lobby_screen.dart';
 import 'package:route_mate_app/features/map_routing/screens/routing_panel.dart';
 import 'package:route_mate_app/features/sos_emergency/screens/sos_screen.dart';
+import 'package:route_mate_app/features/profile/screens/profile_screen.dart';
 import 'package:route_mate_app/features/group_radar/presentation/providers/members_provider.dart';
 import 'package:route_mate_app/data/repositories/group_repository.dart';
 import 'package:route_mate_app/core/services/location_service.dart';
+import 'package:route_mate_app/core/services/solo_room_service.dart';
+import 'package:route_mate_app/core/constants/app_colors.dart';
 
 import 'package:firebase_messaging/firebase_messaging.dart';
 import '../sos_emergency/widgets/sos_map_overlay.dart' show SOSMapOverlay;
@@ -26,6 +29,8 @@ class _MainShellScreenState extends State<MainShellScreen> {
   @override
   void initState() {
     super.initState();
+
+    SoloRoomService.ensureSoloRoom();
 
     FirebaseMessaging.instance.requestPermission();
 
@@ -93,6 +98,51 @@ class _MainShellScreenState extends State<MainShellScreen> {
     });
   }
 
+  Widget _buildTabItem(BuildContext ctx, {
+    required int index,
+    required IconData icon,
+    required IconData activeIcon,
+    required String label,
+    bool isSos = false,
+  }) {
+    final isSelected = _currentIndex == index;
+    final color = isSelected 
+        ? (isSos ? AppColors.sos : AppColors.primary)
+        : Colors.grey;
+
+    return InkWell(
+      onTap: () {
+        if (index == _currentIndex) return;
+        if (_currentIndex == 1 && ctx.read<MapStateProvider>().isGroupModeActive) {
+          ScaffoldMessenger.of(ctx).showSnackBar(
+            const SnackBar(
+              content: Text('Vui lòng rời phòng trước khi chuyển tab'),
+              backgroundColor: Colors.orange,
+              duration: Duration(seconds: 2),
+            ),
+          );
+          return;
+        }
+        setState(() => _currentIndex = index);
+      },
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(isSelected ? activeIcon : icon, color: color),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              color: color,
+              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return MultiProvider(
@@ -110,8 +160,10 @@ class _MainShellScreenState extends State<MainShellScreen> {
           SafeArea(child: RoutingPanel(isActive: _currentIndex == 0)),
           const RoomLobbyScreen(),
           const SafeArea(child: SosScreen()),
+          const ProfileScreen(),
         ];
         return Scaffold(
+          extendBody: true,
           body: Stack(
             children: [
               const MainMapScreen(),
@@ -125,41 +177,37 @@ class _MainShellScreenState extends State<MainShellScreen> {
               )),
             ],
           ),
-          bottomNavigationBar: NavigationBar(
-          selectedIndex: _currentIndex,
-          onDestinationSelected: (index) {
-            if (index == _currentIndex) return;
-            if (_currentIndex == 1 && ctx.read<MapStateProvider>().isGroupModeActive) {
+          floatingActionButton: FloatingActionButton(
+            backgroundColor: AppColors.sos,
+            foregroundColor: Colors.white,
+            shape: const CircleBorder(),
+            elevation: 4,
+            onPressed: () {
               ScaffoldMessenger.of(ctx).showSnackBar(
-                const SnackBar(
-                  content: Text('Vui lòng rời phòng trước khi chuyển tab'),
-                  backgroundColor: Colors.orange,
-                  duration: Duration(seconds: 2),
-                ),
+                const SnackBar(content: Text('Chức năng điều khiển giọng nói đang kích hoạt...')),
               );
-              return;
-            }
-            setState(() => _currentIndex = index);
-          },
-          backgroundColor: Colors.white,
-          indicatorColor: Colors.blue.withValues(alpha: 0.12),
-          destinations: const [
-            NavigationDestination(
-              icon: Icon(Icons.map_outlined),
-              selectedIcon: Icon(Icons.map),
-              label: 'Bản đồ',
+            },
+            child: const Icon(Icons.mic, size: 30),
+          ),
+          floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
+          bottomNavigationBar: BottomAppBar(
+            shape: const CircularNotchedRectangle(),
+            notchMargin: 8.0,
+            color: Colors.white,
+            elevation: 10,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4.0),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                children: [
+                  _buildTabItem(ctx, index: 0, icon: Icons.map_outlined, activeIcon: Icons.map, label: 'Bản đồ'),
+                  _buildTabItem(ctx, index: 1, icon: Icons.group_outlined, activeIcon: Icons.group, label: 'Nhóm'),
+                  const SizedBox(width: 48), // Khoảng trống cho FAB
+                  _buildTabItem(ctx, index: 2, icon: Icons.sos_outlined, activeIcon: Icons.sos, label: 'SOS', isSos: true),
+                  _buildTabItem(ctx, index: 3, icon: Icons.person_outline, activeIcon: Icons.person, label: 'Hồ sơ'),
+                ],
+              ),
             ),
-            NavigationDestination(
-              icon: Icon(Icons.group_outlined),
-              selectedIcon: Icon(Icons.group),
-              label: 'Đội nhóm',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.sos_outlined, color: Colors.red),
-              selectedIcon: Icon(Icons.sos, color: Colors.red),
-              label: 'SOS',
-            ),
-          ],
           ),
         );
       }),

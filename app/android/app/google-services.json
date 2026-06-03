@@ -15,6 +15,14 @@
       },
       "oauth_client": [
         {
+          "client_id": "149102156630-8r9cgl7fm6f154gkb61km53tesebcbb5.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.app",
+            "certificate_hash": "6dd56588291ceb319dcef1607e19d92e3298bf96"
+          }
+        },
+        {
           "client_id": "149102156630-q55jilo04rug4sok4an9etan848jue9u.apps.googleusercontent.com",
           "client_type": 3
         }
@@ -32,10 +40,10 @@
               "client_type": 3
             },
             {
-              "client_id": "149102156630-f4076ravhd5fvb8nahpimbj4bn672b5f.apps.googleusercontent.com",
+              "client_id": "149102156630-5qibcicvm7cpafaj1efatr270bmu6i1s.apps.googleusercontent.com",
               "client_type": 2,
               "ios_info": {
-                "bundle_id": "com.example.flutterApplication2"
+                "bundle_id": "vn.hcmus.n07.routemate"
               }
             }
           ]
@@ -68,10 +76,10 @@
               "client_type": 3
             },
             {
-              "client_id": "149102156630-f4076ravhd5fvb8nahpimbj4bn672b5f.apps.googleusercontent.com",
+              "client_id": "149102156630-5qibcicvm7cpafaj1efatr270bmu6i1s.apps.googleusercontent.com",
               "client_type": 2,
               "ios_info": {
-                "bundle_id": "com.example.flutterApplication2"
+                "bundle_id": "vn.hcmus.n07.routemate"
               }
             }
           ]
@@ -104,10 +112,10 @@
               "client_type": 3
             },
             {
-              "client_id": "149102156630-f4076ravhd5fvb8nahpimbj4bn672b5f.apps.googleusercontent.com",
+              "client_id": "149102156630-5qibcicvm7cpafaj1efatr270bmu6i1s.apps.googleusercontent.com",
               "client_type": 2,
               "ios_info": {
-                "bundle_id": "com.example.flutterApplication2"
+                "bundle_id": "vn.hcmus.n07.routemate"
               }
             }
           ]

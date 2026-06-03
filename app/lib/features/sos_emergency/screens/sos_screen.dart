@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:async';
+import 'dart:ui' as ui;
 import 'package:provider/provider.dart';
 import 'sos_history_screen.dart';
 
@@ -130,148 +131,187 @@ class _SosScreenState extends State<SosScreen> with TickerProviderStateMixin {
       width: double.infinity,
       height: double.infinity,
       color: _isSending ? Colors.red.withValues(alpha: 0.18) : Colors.transparent,
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.center,
+      child: Stack(
         children: [
-          Text(
-            _isSending ? 'ĐANG LIÊN LẠC ĐỘI CỨU HỘ...' : 'HỖ TRỢ KHẨN CẤP',
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-              color: Colors.white,
-              shadows: const [Shadow(color: Colors.black54, blurRadius: 6)],
+          // Glassmorphism background
+          Positioned.fill(
+            child: ClipRect(
+              child: BackdropFilter(
+                filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                child: Container(
+                  color: Colors.black.withValues(alpha: 0.4), // Dark overlay
+                ),
+              ),
             ),
           ),
-          const SizedBox(height: 8),
-          Consumer<MembersProvider>(
-            builder: (_, provider, __) {
-              final roomId = provider.roomId;
-              final inGroup = roomId != null && roomId.isNotEmpty;
-              return Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: inGroup
-                      ? Colors.green.withValues(alpha: 0.1)
-                      : Colors.orange.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: inGroup ? Colors.green : Colors.orange),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      inGroup ? Icons.group : Icons.group_off,
-                      size: 16,
-                      color: inGroup ? Colors.green : Colors.orange,
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      inGroup ? 'Phòng: $roomId' : 'Chưa tham gia nhóm',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: inGroup ? Colors.green[700] : Colors.orange[700],
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
-          const SizedBox(height: 52),
-          Stack(
-            alignment: Alignment.center,
-            children: [
-              if (_isHolding && !_isSending)
-                ScaleTransition(
-                  scale: _rippleController,
-                  child: Container(
-                    width: 250,
-                    height: 250,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Colors.red.withValues(
-                        alpha: (0.3 - (_rippleController.value * 0.3)).clamp(0.0, 0.3),
-                      ),
-                    ),
+          
+          Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Text(
+                  _isSending ? 'ĐANG LIÊN LẠC ĐỘI CỨU HỘ...' : 'HỖ TRỢ KHẨN CẤP',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                    shadows: const [Shadow(color: Colors.black54, blurRadius: 6)],
                   ),
                 ),
-              if (!_isSending)
-                SizedBox(
-                  width: 170,
-                  height: 170,
-                  child: CircularProgressIndicator(
-                    value: _currentProgress,
-                    strokeWidth: 8,
-                    valueColor: const AlwaysStoppedAnimation<Color>(Colors.redAccent),
-                  ),
-                ),
-              _isSending
-                  ? const SizedBox(
-                      width: 150,
-                      height: 150,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 6,
-                        color: Colors.red,
-                      ),
-                    )
-                  : GestureDetector(
-                      onTapDown: (_) => _startCountdown(),
-                      onTapUp: (_) => _stopCountdown(),
-                      onTapCancel: () => _stopCountdown(),
-                      child: ScaleTransition(
-                        scale: Tween(begin: 1.0, end: _isHolding ? 1.15 : 1.05).animate(_pulseController),
-                        child: Container(
-                          width: 150,
-                          height: 150,
-                          decoration: BoxDecoration(
-                            color: Colors.red,
-                            shape: BoxShape.circle,
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.red.withValues(alpha: 0.4),
-                                blurRadius: _isHolding ? 40 : 20,
-                              ),
-                            ],
+                const SizedBox(height: 12),
+                Consumer<MembersProvider>(
+                  builder: (_, provider, __) {
+                    final roomId = provider.roomId;
+                    final inGroup = roomId != null && roomId.isNotEmpty;
+                    return Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: inGroup
+                            ? Colors.green.withValues(alpha: 0.2)
+                            : Colors.orange.withValues(alpha: 0.2),
+                        borderRadius: BorderRadius.circular(30),
+                        border: Border.all(
+                          color: inGroup ? Colors.greenAccent : Colors.orangeAccent,
+                          width: 1.5,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black12,
+                            blurRadius: 10,
                           ),
-                          child: const Center(
-                            child: Text(
-                              'SOS',
-                              style: TextStyle(color: Colors.white, fontSize: 42, fontWeight: FontWeight.bold),
+                        ],
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            inGroup ? Icons.group : Icons.group_off,
+                            size: 18,
+                            color: inGroup ? Colors.greenAccent : Colors.orangeAccent,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            inGroup ? 'Phòng: $roomId' : 'Chưa tham gia nhóm',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.white,
                             ),
                           ),
-                        ),
-                      ),
-                    ),
-              Positioned(
-                top: 0,
-                right: 0,
-                child: IconButton(
-                  icon: const Icon(Icons.history, color: Colors.grey, size: 30),
-                  tooltip: 'Xem lịch sử SOS',
-                  onPressed: () {
-                    final currentRoomId =
-                        Provider.of<MembersProvider>(context, listen: false).roomId ?? '';
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => SosHistoryScreen(roomId: currentRoomId),
+                        ],
                       ),
                     );
                   },
                 ),
-              ),
-            ],
+                const SizedBox(height: 52),
+                Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    if (_isHolding && !_isSending)
+                      ScaleTransition(
+                        scale: _rippleController,
+                        child: Container(
+                          width: 250,
+                          height: 250,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.red.withValues(
+                              alpha: (0.3 - (_rippleController.value * 0.3)).clamp(0.0, 0.3),
+                            ),
+                          ),
+                        ),
+                      ),
+                    if (!_isSending)
+                      SizedBox(
+                        width: 170,
+                        height: 170,
+                        child: CircularProgressIndicator(
+                          value: _currentProgress,
+                          strokeWidth: 8,
+                          valueColor: const AlwaysStoppedAnimation<Color>(Colors.redAccent),
+                        ),
+                      ),
+                    _isSending
+                        ? const SizedBox(
+                            width: 150,
+                            height: 150,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 6,
+                              color: Colors.red,
+                            ),
+                          )
+                        : GestureDetector(
+                            onTapDown: (_) => _startCountdown(),
+                            onTapUp: (_) => _stopCountdown(),
+                            onTapCancel: () => _stopCountdown(),
+                            child: ScaleTransition(
+                              scale: Tween(begin: 1.0, end: _isHolding ? 1.15 : 1.05).animate(_pulseController),
+                              child: Container(
+                                width: 150,
+                                height: 150,
+                                decoration: BoxDecoration(
+                                  gradient: const LinearGradient(
+                                    colors: [Colors.redAccent, Colors.red],
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                  ),
+                                  shape: BoxShape.circle,
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.red.withValues(alpha: 0.6),
+                                      blurRadius: _isHolding ? 40 : 20,
+                                      spreadRadius: _isHolding ? 10 : 0,
+                                    ),
+                                  ],
+                                ),
+                                child: const Center(
+                                  child: Text(
+                                    'SOS',
+                                    style: TextStyle(color: Colors.white, fontSize: 42, fontWeight: FontWeight.bold),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                  ],
+                ),
+                const SizedBox(height: 80),
+                Text(
+                  _isSending ? 'Vui lòng giữ bình tĩnh và chờ đợi...' : 'NHẤN GIỮ ĐỂ GỬI TÍN HIỆU.',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    letterSpacing: 1.5,
+                    fontSize: 12,
+                    shadows: [Shadow(color: Colors.black54, blurRadius: 4)],
+                  ),
+                ),
+              ],
+            ),
           ),
-          const SizedBox(height: 80),
-          Text(
-            _isSending ? 'Vui lòng giữ bình tĩnh và chờ đợi...' : 'NHẤN GIỮ ĐỂ GỬI TÍN HIỆU.',
-            style: const TextStyle(
-              color: Colors.white,
-              letterSpacing: 1.5,
-              fontSize: 12,
-              shadows: [Shadow(color: Colors.black54, blurRadius: 4)],
+          
+          Positioned(
+            top: 40,
+            right: 16,
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.5),
+                shape: BoxShape.circle,
+              ),
+              child: IconButton(
+                icon: const Icon(Icons.history, color: Colors.white, size: 26),
+                tooltip: 'Xem lịch sử SOS',
+                onPressed: () {
+                  final currentRoomId =
+                      Provider.of<MembersProvider>(context, listen: false).roomId ?? '';
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => SosHistoryScreen(roomId: currentRoomId),
+                    ),
+                  );
+                },
+              ),
             ),
           ),
         ],

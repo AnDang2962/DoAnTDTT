@@ -223,19 +223,20 @@ class MarkerBuilder {
   }
 
   /// Vẽ pin tròn dạng Apple Find My cho thành viên nhóm.
-  /// Viền màu theo vai trò, ảnh đại diện (placeholder: bóng người xám).
-  /// [avatarBytes]: ảnh thực từ login (để null dùng placeholder).
+  /// Viền màu theo danh hiệu (badgeLevel), ảnh đại diện (placeholder: bóng người xám).
+  /// [avatarImage]: ảnh thực từ url (để null dùng placeholder).
   static Future<Uint8List> buildMemberBubble({
     required String name,
     required String role,
     ui.Image? avatarImage,
+    int badgeLevel = 0,
     double devicePixelRatio = 3.0,
   }) async {
-    const double R = 26.0;
-    const double border = 3.5;
+    const double R = 30.0;
+    const double border = 4.5;
     const double innerR = R - border;
     const double tailH = 14.0;
-    const double tailW = 13.0;
+    const double tailW = 14.0;
     const double topPad = 4.0;
     const double sidePad = 4.0;
     const double imgW = R * 2 + sidePad * 2;
@@ -248,27 +249,29 @@ class MarkerBuilder {
     canvas.scale(devicePixelRatio);
 
     Color borderColor;
-    switch (role.toLowerCase()) {
-      case 'leader':  borderColor = const Color(0xFF1F4E79); break;
-      case 'sweeper': borderColor = const Color(0xFF2E7D32); break;
-      default:        borderColor = const Color(0xFFF57C00);
+    switch (badgeLevel) {
+      case 1: borderColor = const Color(0xFFCD7F32); break; // Đồng
+      case 2: borderColor = const Color(0xFFC0C0C0); break; // Bạc
+      case 3: borderColor = const Color(0xFFFFD700); break; // Vàng
+      case 4: borderColor = const Color(0xFF00E5FF); break; // Huyền thoại
+      default: borderColor = Colors.grey.shade600; // Tân binh
     }
 
     // 1. Shadow
     final shadowPaint = Paint()
-      ..color = Colors.black.withOpacity(0.28)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4.0);
-    canvas.drawCircle(Offset(cx + 1, cy + 1), R, shadowPaint);
+      ..color = Colors.black.withOpacity(0.3)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5.0);
+    canvas.drawCircle(Offset(cx, cy + 2), R, shadowPaint);
     canvas.drawPath(
       Path()
         ..moveTo(cx - tailW / 2, cy + R - 5)
-        ..lineTo(cx + 1, imgH)
+        ..lineTo(cx, imgH + 2)
         ..lineTo(cx + tailW / 2, cy + R - 5)
         ..close(),
       shadowPaint,
     );
 
-    // 2. Viền màu role (circle + tail cùng màu liền mạch)
+    // 2. Viền màu badge (circle + tail cùng màu liền mạch)
     final borderPaint = Paint()..color = borderColor;
     canvas.drawCircle(Offset(cx, cy), R, borderPaint);
     canvas.drawPath(
@@ -286,12 +289,21 @@ class MarkerBuilder {
 
     if (avatarImage != null) {
       // Ảnh thực: scale + center crop vào vòng tròn
-      final src = Rect.fromLTWH(0, 0, avatarImage.width.toDouble(), avatarImage.height.toDouble());
+      double scaleX = innerR * 2 / avatarImage.width;
+      double scaleY = innerR * 2 / avatarImage.height;
+      double scale = scaleX > scaleY ? scaleX : scaleY;
+      
+      final srcW = innerR * 2 / scale;
+      final srcH = innerR * 2 / scale;
+      final srcX = (avatarImage.width - srcW) / 2;
+      final srcY = (avatarImage.height - srcH) / 2;
+      
+      final src = Rect.fromLTWH(srcX, srcY, srcW, srcH);
       final dst = Rect.fromCircle(center: Offset(cx, cy), radius: innerR);
       canvas.drawImageRect(avatarImage, src, dst, Paint());
     } else {
       // Placeholder: nền xám + bóng người
-      canvas.drawCircle(Offset(cx, cy), innerR, Paint()..color = const Color(0xFFEEEEEE));
+      canvas.drawCircle(Offset(cx, cy), innerR, Paint()..color = const Color(0xFFE0E0E0));
       final personPaint = Paint()..color = const Color(0xFF9E9E9E);
       // Đầu
       canvas.drawCircle(Offset(cx, cy - innerR * 0.18), innerR * 0.34, personPaint);
@@ -315,8 +327,32 @@ class MarkerBuilder {
       Paint()
         ..color = Colors.white
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.5,
+        ..strokeWidth = 2.0,
     );
+    
+    // 5. Thêm icon nhỏ báo hiệu role
+    if (role == 'leader' || role == 'sweeper') {
+      final iconR = 10.0;
+      final iconCy = cy + R - iconR;
+      final iconCx = cx + R - iconR;
+      
+      canvas.drawCircle(Offset(iconCx, iconCy), iconR, Paint()..color = Colors.white);
+      
+      final innerIconR = iconR - 1.5;
+      Color roleColor = role == 'leader' ? Colors.blue : Colors.green;
+      canvas.drawCircle(Offset(iconCx, iconCy), innerIconR, Paint()..color = roleColor);
+      
+      // Vẽ chữ L hoặc S mini
+      final textPainter = TextPainter(
+        text: TextSpan(
+          text: role == 'leader' ? 'L' : 'S',
+          style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+        ),
+        textDirection: TextDirection.ltr,
+      );
+      textPainter.layout();
+      textPainter.paint(canvas, Offset(iconCx - textPainter.width / 2, iconCy - textPainter.height / 2));
+    }
 
     final picture = recorder.endRecording();
     final image = await picture.toImage(

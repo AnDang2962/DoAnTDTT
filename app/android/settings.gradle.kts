@@ -1,5 +1,10 @@
 pluginManagement {
-    val flutterSdkPath = "D:/DaiHoc/DoAn_TDTT/flutter"
+    val localProperties = java.util.Properties()
+    val localPropertiesFile = java.io.File(settingsDir, "local.properties")
+    if (localPropertiesFile.exists()) {
+        localPropertiesFile.inputStream().use { localProperties.load(it) }
+    }
+    val flutterSdkPath = localProperties.getProperty("flutter.sdk") ?: "C:/development/flutter_windows_3.41.9-stable/flutter"
 
     includeBuild("$flutterSdkPath/packages/flutter_tools/gradle")
 

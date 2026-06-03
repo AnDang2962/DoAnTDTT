@@ -9,10 +9,10 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 
+import 'package:provider/provider.dart';
+import 'package:route_mate_app/core/theme/theme_provider.dart';
+import 'package:route_mate_app/features/auth/screens/auth_wrapper.dart';
 import 'firebase_options.dart';
-import 'package:route_mate_app/features/main_shell/main_shell_screen.dart';
-import 'package:route_mate_app/core/services/solo_room_service.dart';
-
 
 /// =========================================================
 /// EMULATOR SWITCH — Connect frontend với backend emulator
@@ -59,7 +59,10 @@ Future<void> main() async {
     final String host;
     if (kIsWeb) {
       host = '127.0.0.1';
-    } else if (Platform.isAndroid || Platform.isIOS) {
+    } else if (Platform.isAndroid) {
+      // 10.0.2.2 là localhost của máy tính khi chạy trên máy ảo Android
+      host = '10.0.2.2';
+    } else if (Platform.isIOS) {
       host = _macLanIp;
     } else {
       host = '127.0.0.1';
@@ -69,7 +72,8 @@ Future<void> main() async {
       // QUAN TRỌNG: Functions phải dùng region 'asia-southeast1' (backend deploy ở đây)
       FirebaseFunctions.instanceFor(region: 'asia-southeast1')
           .useFunctionsEmulator(host, 5001);
-      await FirebaseAuth.instance.useAuthEmulator(host, 9099);
+      // NOTE: Auth KHÔNG dùng emulator để Google Sign-In hoạt động bình thường
+      // await FirebaseAuth.instance.useAuthEmulator(host, 9099);
       FirebaseDatabase.instance.useDatabaseEmulator(host, 9000);
       FirebaseFirestore.instance.useFirestoreEmulator(host, 8080);
 
@@ -91,21 +95,9 @@ Future<void> main() async {
     debugPrint('▶ PRODUCTION mode — không connect emulator');
   }
 
-  // === 4. Anonymous sign-in (FIX: UNAUTHENTICATED khi gọi callable) ===
-  try {
-    if (FirebaseAuth.instance.currentUser == null) {
-      final cred = await FirebaseAuth.instance.signInAnonymously();
-      debugPrint('✓ Signed in as: ${cred.user?.uid}');
-    } else {
-      debugPrint(
-          '✓ Already signed in: ${FirebaseAuth.instance.currentUser?.uid}');
-    }
-  } catch (e) {
-    debugPrint('⚠ Sign-in failed: $e');
-  }
+  // === 4. Đã bỏ Anonymous sign-in và SoloRoom init ở đây ===
+  // SoloRoomService.ensureSoloRoom() sẽ được gọi trong MainShellScreen.
 
-  // === 5. Tạo solo room cho tab Tìm đường ===
-  await SoloRoomService.ensureSoloRoom();
 
   runApp(const MyApp());
 }
@@ -115,14 +107,20 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'RouteMate',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
-        useMaterial3: true,
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => ThemeProvider()),
+      ],
+      child: Consumer<ThemeProvider>(
+        builder: (context, themeProvider, child) {
+          return MaterialApp(
+            debugShowCheckedModeBanner: false,
+            title: 'RouteMate',
+            theme: themeProvider.currentTheme,
+            home: const AuthWrapper(),
+          );
+        },
       ),
-      home: const MainShellScreen(),
     );
   }
 }
