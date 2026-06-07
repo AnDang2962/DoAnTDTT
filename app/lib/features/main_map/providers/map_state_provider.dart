@@ -17,6 +17,7 @@ class MapStateProvider extends ChangeNotifier {
   mapbox.MapboxMap? _mapboxMap;
   mapbox.PointAnnotationManager? _pointManager;
   mapbox.PolylineAnnotationManager? _polylineManager;
+  mapbox.Cancelable? _markerTapSub;
   StreamSubscription<CompassEvent>? _compassSub;
 
   bool get isMapReady => _mapboxMap != null && _pointManager != null && _polylineManager != null;
@@ -227,6 +228,13 @@ class MapStateProvider extends ChangeNotifier {
   final List<mapbox.PointAnnotation> _destMarkers = [];
   final List<mapbox.PointAnnotation> _weatherMarkers = [];
   final List<mapbox.PointAnnotation> _riskMarkers = [];
+  final Map<String, WarningMarker> _weatherMarkerData = {};
+  final Map<String, WarningMarker> _riskMarkerData = {};
+  Function(WarningMarker)? _markerTapHandler;
+
+  void setMarkerTapHandler(Function(WarningMarker)? handler) {
+    _markerTapHandler = handler;
+  }
 
   List<WarningMarker> weatherWarnings = [];
   mapbox.Position? _destinationPosition;
@@ -234,6 +242,10 @@ class MapStateProvider extends ChangeNotifier {
   Future<void> onMapCreated(mapbox.MapboxMap mapboxMap) async {
     _mapboxMap = mapboxMap;
     _pointManager = await mapboxMap.annotations.createPointAnnotationManager();
+    _markerTapSub = _pointManager!.tapEvents(onTap: (annotation) {
+      final marker = _weatherMarkerData[annotation.id] ?? _riskMarkerData[annotation.id];
+      if (marker != null) _markerTapHandler?.call(marker);
+    });
     _polylineManager = await mapboxMap.annotations.createPolylineAnnotationManager();
     await _mapboxMap?.location.updateSettings(
       mapbox.LocationComponentSettings(enabled: true, pulsingEnabled: true),
@@ -434,7 +446,7 @@ class MapStateProvider extends ChangeNotifier {
       await _polylineManager!.create(
         mapbox.PolylineAnnotationOptions(
           geometry: mapbox.LineString(coordinates: points),
-          lineColor: isSelected ? Colors.blue.value : Colors.grey.value,
+          lineColor: isSelected ? Colors.blue.toARGB32() : Colors.grey.toARGB32(),
           lineWidth: isSelected ? 6.0 : 4.0,
           lineOpacity: isSelected ? 1.0 : 0.5,
         ),
@@ -448,6 +460,7 @@ class MapStateProvider extends ChangeNotifier {
       try { await _pointManager!.delete(m); } catch (_) {}
     }
     _weatherMarkers.clear();
+    _weatherMarkerData.clear();
     weatherWarnings = List.from(weatherList);
 
     final occupiedPositions = <mapbox.Position>[];
@@ -474,6 +487,7 @@ class MapStateProvider extends ChangeNotifier {
         ),
       );
       _weatherMarkers.add(annotation);
+      _weatherMarkerData[annotation.id] = w;
       occupiedPositions.add(adjustedPos);
     }
   }
@@ -484,10 +498,11 @@ class MapStateProvider extends ChangeNotifier {
       try { await _pointManager!.delete(m); } catch (_) {}
     }
     _riskMarkers.clear();
+    _riskMarkerData.clear();
 
     final occupiedPositions = <mapbox.Position>[
       ...memberLocations.values,
-      if (_destinationPosition != null) _destinationPosition!,
+      ?_destinationPosition,
       ..._weatherMarkers.map((m) => m.geometry.coordinates),
     ];
 
@@ -510,6 +525,7 @@ class MapStateProvider extends ChangeNotifier {
         ),
       );
       _riskMarkers.add(annotation);
+      _riskMarkerData[annotation.id] = risk;
       occupiedPositions.add(adjustedPos);
     }
   }
@@ -537,6 +553,7 @@ class MapStateProvider extends ChangeNotifier {
   @override
   void dispose() {
     _compassSub?.cancel();
+    _markerTapSub?.cancel();
     super.dispose();
   }
 
@@ -561,13 +578,15 @@ class MapStateProvider extends ChangeNotifier {
         _cachedAvatarImages.clear();
       } else {
         if (_navArrow != null) try { await _pointManager!.delete(_navArrow!); } catch (_) {}
-        for (final m in _destMarkers) try { await _pointManager!.delete(m); } catch (_) {}
-        for (final m in _weatherMarkers) try { await _pointManager!.delete(m); } catch (_) {}
-        for (final m in _riskMarkers) try { await _pointManager!.delete(m); } catch (_) {}
+        for (final m in _destMarkers) { try { await _pointManager!.delete(m); } catch (_) {} }
+        for (final m in _weatherMarkers) { try { await _pointManager!.delete(m); } catch (_) {} }
+        for (final m in _riskMarkers) { try { await _pointManager!.delete(m); } catch (_) {} }
       }
       _destMarkers.clear();
       _weatherMarkers.clear();
       _riskMarkers.clear();
+      _weatherMarkerData.clear();
+      _riskMarkerData.clear();
       _destinationPosition = null;
     }
     _navArrow = null;
@@ -587,3 +606,4 @@ class MapStateProvider extends ChangeNotifier {
     notifyListeners();
   }
 }
+

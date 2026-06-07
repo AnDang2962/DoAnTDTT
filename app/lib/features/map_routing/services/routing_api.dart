@@ -22,9 +22,7 @@ class RoutingApi {
           return mapbox.Position(coords[0], coords[1]); 
         }
       }
-    } catch (e) {
-      print('Lỗi Geocoding: $e');
-    }
+    } catch (_) {}
     return null;
   }
 
@@ -42,9 +40,7 @@ class RoutingApi {
           return coordinates.map((c) => mapbox.Position(c[0] as double, c[1] as double)).toList();
         }
       }
-    } catch (e) {
-      print('Lỗi Directions: $e');
-    }
+    } catch (_) {}
     return [];
   }
 }

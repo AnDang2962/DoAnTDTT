@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'package:cloud_functions/cloud_functions.dart';
 import 'package:http/http.dart' as http;
 import '../../../core/constants/env_keys.dart';
 import '../../../core/services/firebase_functions_helper.dart';

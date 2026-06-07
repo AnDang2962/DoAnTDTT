@@ -66,10 +66,17 @@ class WarningMarker {
     switch (category) {
       case 'WEATHER':
         switch (subtype) {
+          // user-reported
           case 'heavy_rain': return '🌧️';
           case 'flooding': return '🌊';
-          case 'fog': return '🌫️';
           case 'strong_wind': return '💨';
+          // weather API display
+          case 'rain': return '🌧️';
+          case 'storm': return '⛈️';
+          case 'snow': return '🌨️';
+          case 'sunny': return '☀️';
+          case 'cloudy': return '☁️';
+          case 'fog': return '🌫️';
           default: return '🌩️';
         }
       case 'ACCIDENT':
@@ -110,10 +117,17 @@ class WarningMarker {
     switch (category) {
       case 'WEATHER':
         switch (subtype) {
+          // user-reported
           case 'heavy_rain': return Icons.water;
           case 'flooding': return Icons.waves;
-          case 'fog': return Icons.foggy;
           case 'strong_wind': return Icons.air;
+          // weather API display
+          case 'rain': return Icons.water;
+          case 'storm': return Icons.thunderstorm;
+          case 'snow': return Icons.ac_unit;
+          case 'sunny': return Icons.wb_sunny;
+          case 'cloudy': return Icons.cloud;
+          case 'fog': return Icons.foggy;
           default: return Icons.thunderstorm;
         }
       case 'ACCIDENT':

@@ -13,12 +13,14 @@ class RoutingSearchBar extends StatefulWidget {
       onDestinationSelected;
   final VoidCallback onClear;
   final Function(String spokenText)? onVoiceCommand;
+  final String? destinationName;
 
   const RoutingSearchBar({
     Key? key,
     required this.onDestinationSelected,
     required this.onClear,
     this.onVoiceCommand,
+    this.destinationName,
   }) : super(key: key);
 
   @override
@@ -29,6 +31,20 @@ class _RoutingSearchBarState extends State<RoutingSearchBar> {
   final TextEditingController _searchController = TextEditingController();
   List<GeocodedPlace> _suggestions = [];
   bool _isLoading = false;
+
+  @override
+  void didUpdateWidget(RoutingSearchBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final newName = widget.destinationName;
+    if (newName != null && newName != oldWidget.destinationName && _searchController.text != newName) {
+      _searchController.text = newName;
+      _suggestions = [];
+    }
+    if (newName == null && oldWidget.destinationName != null) {
+      _searchController.clear();
+      _suggestions = [];
+    }
+  }
 
   @override
   void dispose() {

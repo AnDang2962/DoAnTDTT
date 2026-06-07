@@ -35,10 +35,10 @@ class VoiceService {
     if (!_isInitialized || _isListening) return;
     try {
       await _speech.listen(
-        localeId: 'vi_VN',
-        listenFor: const Duration(seconds: 10),
-        pauseFor: const Duration(seconds: 3),
         listenOptions: stt.SpeechListenOptions(
+          localeId: 'vi_VN',
+          listenFor: const Duration(seconds: 10),
+          pauseFor: const Duration(seconds: 3),
           partialResults: onPartialResult != null,
           cancelOnError: true,
         ),

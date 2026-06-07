@@ -1,4 +1,3 @@
-import 'package:cloud_functions/cloud_functions.dart';
 import '../../../core/services/firebase_functions_helper.dart';
 import '../../../data/models/warning_marker.dart';
 
@@ -40,13 +39,17 @@ class WeatherApi {
       // Phân loại subtype theo weather ID (logic gốc giữ nguyên)
       String subtype;
       if (rawCode >= 200 && rawCode < 300) {
-        subtype = 'heavy_rain'; // Bão → mưa to
+        subtype = 'storm';
       } else if (rawCode >= 300 && rawCode < 600) {
-        subtype = 'heavy_rain';
+        subtype = 'rain';
+      } else if (rawCode >= 600 && rawCode < 700) {
+        subtype = 'snow';
       } else if (rawCode >= 700 && rawCode < 800) {
         subtype = 'fog';
+      } else if (rawCode == 800) {
+        subtype = 'sunny';
       } else {
-        subtype = 'fog'; // mặc định fallback
+        subtype = 'cloudy';
       }
 
       final tempDisplay = '${tempC.toStringAsFixed(1)}°C • 💧 $humidity%';

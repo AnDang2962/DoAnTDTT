@@ -36,6 +36,7 @@ import {
 import { GEMINI_API_KEY, generateWithRetry } from './lib/gemini';
 import {
   projectOntoPolyline,
+  haversineKm,
   Polyline,
 } from './lib/geo';
 import {
@@ -98,11 +99,27 @@ export async function saveRiskLabel(params: {
       : cfg.defaultSeverity;
 
   const nowMs = Date.now();
+
+  // Dedup: nếu đã có risk cùng category+subtype+room trong 200m chưa hết hạn → trả về cái cũ
+  const db = getFirestore();
+  const dupSnap = await db.collection('riskLabels')
+    .where('reportedRoomId', '==', params.reportedRoomId)
+    .where('category', '==', params.category)
+    .where('subtype', '==', params.subtype)
+    .where('expiresAt', '>', Timestamp.fromMillis(nowMs))
+    .limit(20)
+    .get();
+  for (const doc of dupSnap.docs) {
+    const d = doc.data();
+    if (haversineKm(params.lat, params.lng, d.lat as number, d.lng as number) * 1000 <= 200) {
+      return { id: doc.id, severity: d.baseSeverity as number, expiresAt: d.expiresAt as Timestamp };
+    }
+  }
+
   const expiresAt = Timestamp.fromMillis(
     nowMs + cfg.maxLifetimeH * 3600 * 1000
   );
 
-  const db = getFirestore();
   const ref = db.collection('riskLabels').doc();
   await ref.set({
     category: params.category,

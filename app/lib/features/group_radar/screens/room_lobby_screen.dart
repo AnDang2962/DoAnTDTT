@@ -68,7 +68,11 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
         return;
       }
     } catch (e) {
-      debugPrint('[RoomLobbyScreen] restore validation error: $e');
+      // permission-denied = session stale (room closed or user no longer member)
+      final msg = e.toString();
+      if (msg.contains('permission-denied') || msg.contains('not-found')) {
+        await RoomSessionService.clear();
+      }
       return;
     }
 

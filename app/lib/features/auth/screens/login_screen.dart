@@ -9,7 +9,14 @@ import '../../../features/main_shell/main_shell_screen.dart';
 import 'register_screen.dart';
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+  final String initialEmail;
+  final String initialPassword;
+
+  const LoginScreen({
+    super.key,
+    this.initialEmail = '',
+    this.initialPassword = '',
+  });
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -24,6 +31,23 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _guestLoading = false;
 
   bool get _anyLoading => _emailLoading || _googleLoading || _guestLoading;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.initialEmail.isNotEmpty) _emailCtrl.text = widget.initialEmail;
+    if (widget.initialPassword.isNotEmpty) _passCtrl.text = widget.initialPassword;
+    if (widget.initialEmail.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Đăng ký thành công! Nhấn đăng nhập để vào ứng dụng.'),
+          backgroundColor: Colors.green,
+          duration: Duration(seconds: 3),
+        ));
+      });
+    }
+  }
 
   @override
   void dispose() {

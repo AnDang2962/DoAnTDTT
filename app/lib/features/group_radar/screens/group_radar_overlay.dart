@@ -15,6 +15,7 @@ import '../../../data/repositories/room_repository.dart';
 import '../../../data/repositories/warning_repository.dart';
 import '../../main_map/providers/map_state_provider.dart';
 import '../../map_routing/widgets/routing_search_bar.dart';
+import '../../map_routing/widgets/marker_detail_sheet.dart';
 import '../../map_routing/services/weather_api.dart';
 import '../../map_routing/widgets/risk_report_sheet.dart';
 import '../../../core/utils/route_utils.dart';
@@ -62,11 +63,17 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
   Set<String> _prevMemberUids = {};
   Map<String, mapbox.Position> _memberLocations = {};
   final Set<String> _announcedRiskIds = {};
+  final Set<String> _knownRiskIds = {};
   int _lastRiskCheckMs = 0;
+  bool _arrivedNotified = false;
+  final Set<String> _arrivedMemberUids = {};
+  mapbox.Position? _destPos;
 
   String? _loadedRouteKey;
 
   bool _isTooFar = false;
+  bool _prevIsTooFar = false;
+  Set<String> _prevOffRouteUids = {};
   List<Map<String, dynamic>> _gapDetails = [];
   List<Map<String, dynamic>> _offRouteWarnings = [];
   DateTime? _lastGapCheck;
@@ -91,6 +98,7 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
       _mapProvider = context.read<MapStateProvider>();
       _mapProvider!.setGroupMode(true);
       _mapProvider!.setMapTapHandler(_onMapTap);
+      _mapProvider!.setMarkerTapHandler((m) { if (mounted) MarkerDetailSheet.show(context, m); });
       _voiceProv = context.read<VoiceCommandProvider>();
       _voiceProv!.addListener(_onVoiceCommand);
     });
@@ -122,6 +130,14 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
         if (mapProvider.isNavigating) {
           unawaited(mapProvider.setNavArrow(_myLastPos!));
           _checkNearbyRisks();
+          if (!_arrivedNotified && mapProvider.remainingDistanceKm < 0.3) {
+            _arrivedNotified = true;
+            final destName = mapProvider.previewDestName ?? 'Điểm đến';
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text('🎉 Bạn đã đến $destName!'),
+              duration: const Duration(seconds: 5),
+            ));
+          }
         }
       }
     });
@@ -163,10 +179,27 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
         for (final uid in newUids.difference(_prevMemberUids)) {
           if (uid == widget.currentUser.id) continue;
           unawaited(SoundService().playMemberJoin());
+          final name = (newMemberInfo[uid] as Map?)?['displayName']?.toString() ?? 'Thành viên mới';
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text('👋 $name đã vào phòng'),
+              duration: const Duration(seconds: 3),
+            ));
+          }
         }
         for (final uid in _prevMemberUids.difference(newUids)) {
           if (uid == widget.currentUser.id) continue;
           unawaited(SoundService().playMemberLeave());
+          final info = _memberInfo[uid] as Map?;
+          final name = info?['displayName']?.toString() ?? 'Một thành viên';
+          final role = info?['role']?.toString() ?? 'member';
+          if (mounted) {
+            final content = role == 'leader' ? '👑 Leader đã rời phòng' : '🚪 $name đã rời phòng';
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text(content),
+              duration: Duration(seconds: role == 'leader' ? 5 : 3),
+            ));
+          }
         }
       }
       _prevMemberUids = newUids;
@@ -190,6 +223,7 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
         // Chỉ xử lý route mới — leader đã set _loadedRouteKey trước khi push nên sẽ skip,
         // tránh overwrite _fullRouteCoords bằng coords đã downsample từ Firebase
         if (mounted && routeKey != _loadedRouteKey) {
+          final wasNavigating = _loadedRouteKey != null && (context.read<MapStateProvider>().isNavigating);
           _loadedRouteKey = routeKey;
           final mapProvider = context.read<MapStateProvider>();
           _navigationStarting = true;
@@ -204,9 +238,21 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
           _navigationStarting = false;
           final endName = routeData['endName']?.toString() ?? 'Đích đến';
           if (coords.isNotEmpty) {
+            _destPos = coords.last;
             await mapProvider.drawDestinationMarker(coords.last, endName, flyToMarker: false);
           }
+          _arrivedNotified = false;
+          _arrivedMemberUids.clear();
           mapProvider.flyToCurrentLocation();
+          if (mounted) {
+            final msg = wasNavigating
+                ? '📍 Leader đã thay đổi đích đến: $endName'
+                : '🚀 Leader đã bắt đầu dẫn đường đến $endName';
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text(msg),
+              duration: const Duration(seconds: 4),
+            ));
+          }
 
           final polylineData = polyList
               .map<Map<String, double>>((p) => {
@@ -219,6 +265,15 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
           );
           _redrawAllRisks();
           _startCrossGroupRiskTimer(polylineData);
+          _announcedRiskIds.clear();
+          _lastRiskCheckMs = 0;
+          if (_myLastPos == null) {
+            final fallback = await Geolocator.getLastKnownPosition();
+            if (fallback != null) {
+              _myLastPos = mapbox.Position(fallback.longitude, fallback.latitude);
+            }
+          }
+          _checkNearbyRisks();
           await _loadWeatherAlongRoute(coords);
         }
       }
@@ -237,19 +292,63 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
       _memberLocations = newLocations;
       _updateMapMembers();
       _checkFormationDistance();
+      if (_destPos != null && _mapProvider?.isNavigating == true) {
+        for (final entry in newLocations.entries) {
+          final uid = entry.key;
+          if (uid == widget.currentUser.id) continue;
+          if (_arrivedMemberUids.contains(uid)) continue;
+          final dist = Geolocator.distanceBetween(
+            entry.value.lat.toDouble(), entry.value.lng.toDouble(),
+            _destPos!.lat.toDouble(), _destPos!.lng.toDouble(),
+          );
+          if (dist < 300) {
+            _arrivedMemberUids.add(uid);
+            final name = _memberName(uid);
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: Text('✅ $name đã đến nơi'),
+                duration: const Duration(seconds: 4),
+              ));
+            }
+          }
+        }
+      }
     });
 
     _warningsSub = _warningRepo.listenToRoomWarnings(widget.roomId).listen((warnings) {
+      if (!mounted) return;
+
+      // Phát hiện risk mới (chưa có trong _knownRiskIds)
+      final newRisks = warnings.where((r) => !_knownRiskIds.contains(r.id)).toList();
+
+      // Lần đầu load (snapshot ban đầu) — chỉ ghi nhận, không notify
+      final isInitialLoad = _knownRiskIds.isEmpty && warnings.isNotEmpty;
+      for (final r in warnings) { _knownRiskIds.add(r.id); }
+
       _realtimeRisks = warnings;
       _redrawAllRisks();
+
+      if (!isInitialLoad) {
+        for (final r in newRisks) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('${r.emoji} Leader vừa báo cáo: ${r.vi}'),
+            duration: const Duration(seconds: 4),
+          ));
+        }
+      }
+
+      if (_mapProvider?.isNavigating == true) {
+        _lastRiskCheckMs = 0;
+        _checkNearbyRisks();
+      }
     });
   }
 
   void _redrawAllRisks() {
     if (!mounted) return;
     final merged = <String, WarningMarker>{};
-    for (final r in _realtimeRisks) merged[r.id] = r;
-    for (final r in _crossGroupRisks) merged[r.id] = r;
+    for (final r in _realtimeRisks) { merged[r.id] = r; }
+    for (final r in _crossGroupRisks) { merged[r.id] = r; }
     context.read<MapStateProvider>().drawRiskMarkers(merged.values.toList(), _memberLocations);
   }
 
@@ -302,14 +401,35 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
           [];
 
       if (!mounted) return;
+      final newIsTooFar = gaps.isNotEmpty || offRoute.isNotEmpty;
+      final newOffRouteUids = offRoute
+          .map((e) => e['memberId']?.toString() ?? '')
+          .where((uid) => uid.isNotEmpty)
+          .toSet();
       setState(() {
-        _isTooFar = gaps.isNotEmpty || offRoute.isNotEmpty;
+        _isTooFar = newIsTooFar;
         _gapDetails = gaps;
         _offRouteWarnings = offRoute;
       });
-    } catch (e) {
-      debugPrint('[GroupGap] Lỗi checkGroupGap: $e');
-    }
+      for (final uid in newOffRouteUids.difference(_prevOffRouteUids)) {
+        if (uid == widget.currentUser.id) continue;
+        final name = _memberName(uid);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('⚠️ $name đã lệch tuyến đường'),
+            duration: const Duration(seconds: 4),
+          ));
+        }
+      }
+      _prevOffRouteUids = newOffRouteUids;
+      if (!_prevIsTooFar && newIsTooFar && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('⚠️ Đội hình đứt đoạn — kiểm tra lại các thành viên'),
+          duration: Duration(seconds: 5),
+        ));
+      }
+      _prevIsTooFar = newIsTooFar;
+    } catch (_) {}
   }
 
   void _showSnackbar(String msg) {
@@ -329,6 +449,7 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
     mapProvider.clearRoutes();
     await mapProvider.drawDestinationMarker(destPos, placeName);
     setState(() { _lastDestPos = destPos; _lastDestName = placeName; _polylineData = []; });
+    _destPos = destPos;
   }
 
   Future<void> _getDirections() async {
@@ -523,13 +644,24 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
         : '${routeCoords.first.lng},${routeCoords.first.lat}-${routeCoords.last.lng},${routeCoords.last.lat}';
 
     if (_polylineData.isNotEmpty) _startCrossGroupRiskTimer(_polylineData);
+    _destPos = _lastDestPos;
+    _arrivedNotified = false;
+    _arrivedMemberUids.clear();
     _announcedRiskIds.clear();
+    _lastRiskCheckMs = 0;
     mapProvider.startNavigating();
     _navStartTime ??= DateTime.now();
     if (_myLastPos != null) unawaited(mapProvider.setNavArrow(_myLastPos!));
     _updateMapMembers();
     _navigationStarting = false;
     mapProvider.flyToCurrentLocation();
+    if (_myLastPos == null) {
+      final fallback = await Geolocator.getLastKnownPosition();
+      if (fallback != null) {
+        _myLastPos = mapbox.Position(fallback.longitude, fallback.latitude);
+      }
+    }
+    _checkNearbyRisks();
   }
 
   String _memberName(String uid) {
@@ -567,6 +699,7 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
   void dispose() {
     _voiceProv?.removeListener(_onVoiceCommand);
     _mapProvider?.setMapTapHandler(null);
+    _mapProvider?.setMarkerTapHandler(null);
     _gpsSub?.cancel();
     _roomDataSub?.cancel();
     _memberLocationsSub?.cancel();
@@ -658,7 +791,18 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
             right: 16,
             child: RoutingSearchBar(
               onDestinationSelected: _handleDestinationSelected,
-              onClear: () => context.read<MapStateProvider>().clearAll(keepMemberMarkers: true),
+              destinationName: _lastDestPos != null ? _lastDestName : null,
+              onClear: () async {
+                final mapProvider = context.read<MapStateProvider>();
+                await mapProvider.clearAll(keepMemberMarkers: true);
+                mapProvider.clearRoutes();
+                setState(() {
+                  _lastDestPos = null;
+                  _lastDestName = null;
+                  _polylineData = [];
+                  _crossGroupRisks = [];
+                });
+              },
             ),
           ),
 
@@ -816,8 +960,8 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
                     onTap: () => setState(() => _panelOpen = !_panelOpen),
                     onHorizontalDragEnd: (d) {
                       final v = d.primaryVelocity ?? 0;
-                      if (v > 150) setState(() => _panelOpen = true);
-                      else if (v < -150) setState(() => _panelOpen = false);
+                      if (v > 150) { setState(() => _panelOpen = true); }
+                      else if (v < -150) { setState(() => _panelOpen = false); }
                     },
                     behavior: HitTestBehavior.translucent,
                     child: Align(

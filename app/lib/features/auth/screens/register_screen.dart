@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/services/solo_room_service.dart';
 import '../services/auth_service.dart';
+import 'login_screen.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -60,18 +61,19 @@ class _RegisterScreenState extends State<RegisterScreen> {
       );
       await _saveUserToFirestore(cred.user, name, email);
       await SoloRoomService.ensureSoloRoom();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Chào mừng $name! Đăng ký thành công.'),
-            backgroundColor: Colors.green.shade700,
-            duration: const Duration(seconds: 2),
-          ),
-        );
-      }
+      // Sign out sau khi setup xong — tránh auto-redirect vào app
+      await FirebaseAuth.instance.signOut();
+      if (!mounted) return;
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(
+          builder: (_) => LoginScreen(initialEmail: email, initialPassword: pass),
+        ),
+        (route) => false,
+      );
     } on FirebaseAuthException catch (e) {
       _showError(_authError(e.code));
-    } finally {
+      if (mounted) setState(() => _loading = false);
+    } catch (_) {
       if (mounted) setState(() => _loading = false);
     }
   }

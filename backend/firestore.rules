@@ -11,7 +11,8 @@ service cloud.firestore {
     }
     function isMember(roomId) {
       return isAuthed() &&
-             request.auth.uid in get(/databases/$(database)/documents/rooms/$(roomId)).data.members;
+             exists(/databases/$(database)/documents/rooms/$(roomId)) &&
+             request.auth.uid in get(/databases/$(database)/documents/rooms/$(roomId)).data.get('members', []);
     }
 
     // === Rooms ===

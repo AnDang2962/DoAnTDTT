@@ -68,7 +68,7 @@ export const getWeatherAlongRoute = onCall<
       const res = await retry(
         () =>
           axios.get('https://api.openweathermap.org/data/2.5/weather', {
-            params: { lat, lon: lng, units: 'metric', appid: apiKey },
+            params: { lat, lon: lng, units: 'metric', lang: 'vi', appid: apiKey },
             timeout: 5000,
           }),
         { maxAttempts: 3, baseDelayMs: 200, logger: log, opName: 'openweather' }

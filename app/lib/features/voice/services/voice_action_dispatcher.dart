@@ -56,8 +56,6 @@ class VoiceActionDispatcher {
     final params = result['params'] as Map<String, dynamic>? ?? {};
     final responseText = result['responseText']?.toString() ?? '';
 
-    debugPrint('[VoiceDispatch] type=$type action=$action');
-
     try {
       if (type == 'risk') {
         final vi = result['vi']?.toString() ?? 'sự cố';
@@ -97,8 +95,7 @@ class VoiceActionDispatcher {
           if (responseText.isNotEmpty) _showSnackbar(responseText);
           if (responseText.isNotEmpty) await _tts.speak(responseText);
       }
-    } catch (e) {
-      debugPrint('[VoiceDispatch] Lỗi: $e');
+    } catch (_) {
       _showSnackbar('Có lỗi xảy ra khi thực hiện yêu cầu.');
     }
   }

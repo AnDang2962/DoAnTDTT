@@ -17,6 +17,7 @@ import '../../../data/repositories/warning_repository.dart';
 
 import '../widgets/routing_search_bar.dart';
 import '../widgets/risk_report_sheet.dart';
+import '../widgets/marker_detail_sheet.dart';
 import '../services/gemini_ai_api.dart';
 import '../services/geocoding_api.dart';
 import '../../voice/services/voice_action_dispatcher.dart';
@@ -49,6 +50,7 @@ class _RoutingPanelState extends State<RoutingPanel> {
   List<Map<String, double>> _polylineData = [];
   final Set<String> _announcedRiskIds = {};
   int _lastRiskCheckMs = 0;
+  bool _arrivedNotified = false;
 
   void _redrawAllRisks() {
     if (!mounted) return;
@@ -56,8 +58,8 @@ class _RoutingPanelState extends State<RoutingPanel> {
     if (mapProvider.isGroupModeActive) return;
     if (_previewDestPos == null && !mapProvider.isNavigating) return;
     final merged = <String, WarningMarker>{};
-    for (final r in _realtimeRisks) merged[r.id] = r;
-    for (final r in _crossGroupRisks) merged[r.id] = r;
+    for (final r in _realtimeRisks) { merged[r.id] = r; }
+    for (final r in _crossGroupRisks) { merged[r.id] = r; }
     mapProvider.drawRiskMarkers(merged.values.toList(), {});
   }
 
@@ -75,6 +77,7 @@ class _RoutingPanelState extends State<RoutingPanel> {
       _voiceProv!.addListener(_onVoiceCommand);
       if (widget.isActive) {
         _mapProvider!.setMapTapHandler(_onMapTap);
+        _mapProvider!.setMarkerTapHandler(_onMarkerTap);
       }
     });
   }
@@ -84,10 +87,13 @@ class _RoutingPanelState extends State<RoutingPanel> {
     super.didUpdateWidget(oldWidget);
     if (widget.isActive != oldWidget.isActive) {
       _mapProvider?.setMapTapHandler(widget.isActive ? _onMapTap : null);
+      _mapProvider?.setMarkerTapHandler(widget.isActive ? _onMarkerTap : null);
     }
     if (!widget.isActive && oldWidget.isActive) {
       _stopNavGpsStream();
       _riskRefreshTimer?.cancel();
+      _riskSub?.cancel();
+      _riskSub = null;
       if (mounted) {
         final mapProvider = context.read<MapStateProvider>();
         if (mapProvider.isNavigating) {
@@ -98,6 +104,9 @@ class _RoutingPanelState extends State<RoutingPanel> {
           });
         }
       }
+    }
+    if (widget.isActive && !oldWidget.isActive) {
+      _startSoloRiskListener();
     }
   }
 
@@ -148,6 +157,14 @@ class _RoutingPanelState extends State<RoutingPanel> {
       if (mapProvider.isNavigating) {
         unawaited(mapProvider.setNavArrow(_myLastPos!));
         _checkNearbyRisks();
+        if (!_arrivedNotified && mapProvider.remainingDistanceKm < 0.3) {
+          _arrivedNotified = true;
+          final destName = mapProvider.previewDestName ?? 'Điểm đến';
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('🎉 Bạn đã đến $destName!'),
+            duration: const Duration(seconds: 5),
+          ));
+        }
       }
     });
   }
@@ -208,6 +225,12 @@ class _RoutingPanelState extends State<RoutingPanel> {
         'totalTrips': FieldValue.increment(1),
       }, SetOptions(merge: true));
       await batch.commit();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('💾 Chuyến đi đã được lưu vào lịch sử'),
+          duration: Duration(seconds: 3),
+        ));
+      }
     } catch (_) {}
   }
 
@@ -216,10 +239,16 @@ class _RoutingPanelState extends State<RoutingPanel> {
     _navGpsSub = null;
   }
 
+  void _onMarkerTap(WarningMarker marker) {
+    if (!mounted) return;
+    MarkerDetailSheet.show(context, marker);
+  }
+
   @override
   void dispose() {
     _voiceProv?.removeListener(_onVoiceCommand);
     _mapProvider?.setMapTapHandler(null);
+    _mapProvider?.setMarkerTapHandler(null);
     _riskSub?.cancel();
     _riskRefreshTimer?.cancel();
     _navGpsSub?.cancel();
@@ -274,10 +303,10 @@ class _RoutingPanelState extends State<RoutingPanel> {
     final resultAction = result['action']?.toString() ?? '';
 
     // Các lệnh chỉ có ý nghĩa khi đang định tuyến
-    const _navOnlyActions = {'check_weather'};
-    final _isNavOnly = resultType == 'risk' || _navOnlyActions.contains(resultAction);
+    const navOnlyActions = {'check_weather'};
+    final isNavOnly = resultType == 'risk' || navOnlyActions.contains(resultAction);
 
-    if (!isNavigating && _isNavOnly) {
+    if (!isNavigating && isNavOnly) {
       _showSnackbar('Bạn chưa bắt đầu định tuyến, không thể thực hiện tác vụ này');
       return;
     }
@@ -429,10 +458,20 @@ class _RoutingPanelState extends State<RoutingPanel> {
       final durMins = ((chosenRoute['duration'] as num).toDouble() / 60.0).round();
       mapProvider.setRouteStats(distKm, durMins);
       mapProvider.startNavigating();
+      _arrivedNotified = false;
       _navStartTime = DateTime.now();
       _announcedRiskIds.clear();
+      _lastRiskCheckMs = 0;
+      _checkNearbyRisks();
       _startNavGpsStream();
       mapProvider.flyToCurrentLocation();
+      if (mounted) {
+        final destName = mapProvider.previewDestName ?? 'Điểm đến';
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('🗺️ Bắt đầu dẫn đường đến $destName'),
+          duration: const Duration(seconds: 3),
+        ));
+      }
     } catch (e) {
       _showSnackbar('Lỗi bắt đầu điều hướng: $e');
     } finally {
@@ -542,6 +581,7 @@ class _RoutingPanelState extends State<RoutingPanel> {
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: RoutingSearchBar(
               onDestinationSelected: _handleDestinationSelected,
+              destinationName: _previewDestPos != null ? mapProvider.previewDestName : null,
               onClear: () async {
                 await context.read<MapStateProvider>().clearAll();
                 mapProvider.clearRoutes();
