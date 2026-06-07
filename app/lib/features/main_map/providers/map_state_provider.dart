@@ -1,14 +1,17 @@
 import 'dart:async';
 import 'dart:math';
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:flutter_compass/flutter_compass.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mapbox;
 import '../../../core/utils/marker_builder.dart';
 import '../../../core/utils/marker_offset.dart';
 import '../../../core/utils/geo_utils.dart';
+import '../../../core/utils/badge_helper.dart';
 import '../../../data/models/warning_marker.dart';
-import '../../../core/services/location_service.dart';
 
 class MapStateProvider extends ChangeNotifier {
   mapbox.MapboxMap? _mapboxMap;
@@ -22,6 +25,16 @@ class MapStateProvider extends ChangeNotifier {
   bool get isGroupModeActive => _groupModeActive;
   void setGroupMode(bool active) {
     _groupModeActive = active;
+  }
+
+  void Function(mapbox.Position)? _mapTapHandler;
+
+  void setMapTapHandler(void Function(mapbox.Position)? handler) {
+    _mapTapHandler = handler;
+  }
+
+  void notifyMapTap(mapbox.Position pos) {
+    _mapTapHandler?.call(pos);
   }
 
   List<dynamic> availableRoutes = [];
@@ -97,6 +110,33 @@ class MapStateProvider extends ChangeNotifier {
   mapbox.Position? _lastTrimPos;
   bool isOffRoute = false;
 
+  double _initialDistanceKm = 0.0;
+  int _initialDurationMins = 0;
+  double remainingDistanceKm = 0.0;
+  int remainingDurationMins = 0;
+  double get initialDistanceKm => _initialDistanceKm;
+
+  void setRouteStats(double distanceKm, int durationMins) {
+    _initialDistanceKm = distanceKm;
+    _initialDurationMins = durationMins;
+    remainingDistanceKm = distanceKm;
+    remainingDurationMins = durationMins;
+  }
+
+  void setRouteStatsFromCoords(List<mapbox.Position> coords) {
+    double totalDistM = 0;
+    for (int i = 0; i < coords.length - 1; i++) {
+      totalDistM += calculateDistanceMeters(
+        startLat: coords[i].lat.toDouble(),
+        startLng: coords[i].lng.toDouble(),
+        endLat: coords[i + 1].lat.toDouble(),
+        endLng: coords[i + 1].lng.toDouble(),
+      );
+    }
+    final km = totalDistM / 1000.0;
+    setRouteStats(km, (km / 40.0 * 60.0).round());
+  }
+
   void setFullRoute(List<mapbox.Position> coords) {
     _fullRouteCoords = List.from(coords);
     _lastTrimPos = null;
@@ -142,6 +182,21 @@ class MapStateProvider extends ChangeNotifier {
     final remaining = [currentPos, ..._fullRouteCoords.sublist(bestIdx + 1)];
     if (remaining.length < 2) return;
 
+    // Tính lại km + thời gian còn lại
+    double remDistM = 0.0;
+    for (int i = 0; i < remaining.length - 1; i++) {
+      remDistM += calculateDistanceMeters(
+        startLat: remaining[i].lat.toDouble(),
+        startLng: remaining[i].lng.toDouble(),
+        endLat: remaining[i + 1].lat.toDouble(),
+        endLng: remaining[i + 1].lng.toDouble(),
+      );
+    }
+    final remKm = remDistM / 1000.0;
+    final ratio = _initialDistanceKm > 0 ? remKm / _initialDistanceKm : 0.0;
+    remainingDistanceKm = remKm;
+    remainingDurationMins = (ratio * _initialDurationMins).round();
+
     await _polylineManager!.deleteAll();
 
     if (passed.length >= 2) {
@@ -163,6 +218,8 @@ class MapStateProvider extends ChangeNotifier {
 
   final Map<String, mapbox.PointAnnotation> _memberMarkerMap = {};
   Map<String, String> _lastMemberRoles = {};
+  Map<String, String> _lastMemberPhotoUrls = {};
+  final Map<String, ui.Image> _cachedAvatarImages = {};
 
   mapbox.PointAnnotation? _navArrow;
   Uint8List? _navArrowImage;
@@ -203,18 +260,31 @@ class MapStateProvider extends ChangeNotifier {
     _isFollowing = true;
     notifyListeners();
     try {
-      final position = await LocationService().getCurrentPosition();
-      if (position == null) return;
+      // Dùng lastKnownPosition trước — instant, không cần request GPS mới
+      Position? pos = await Geolocator.getLastKnownPosition();
+
+      // Nếu không có cache, lấy fresh với timeout ngắn để tránh treo
+      if (pos == null) {
+        try {
+          pos = await Geolocator.getCurrentPosition(
+            desiredAccuracy: LocationAccuracy.medium,
+            timeLimit: const Duration(seconds: 4),
+          );
+        } catch (_) {
+          return;
+        }
+      }
+
       _mapboxMap?.flyTo(
         mapbox.CameraOptions(
           center: mapbox.Point(
-            coordinates: mapbox.Position(position.longitude, position.latitude),
+            coordinates: mapbox.Position(pos.longitude, pos.latitude),
           ),
           zoom: 15.0,
           bearing: isNavigating ? _lastBearing : null,
           pitch: isNavigating ? 45.0 : 0.0,
         ),
-        mapbox.MapAnimationOptions(duration: 800),
+        mapbox.MapAnimationOptions(duration: 600),
       );
     } catch (e) {
       debugPrint('[MapStateProvider] flyToCurrentLocation error: $e');
@@ -275,10 +345,29 @@ class MapStateProvider extends ChangeNotifier {
     if (flyToMarker) flyTo(dest, zoom: 13.0);
   }
 
+  Future<ui.Image?> _loadAvatar(String url) async {
+    try {
+      final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 5));
+      if (res.statusCode != 200) return null;
+      final codec = await ui.instantiateImageCodec(res.bodyBytes);
+      final frame = await codec.getNextFrame();
+      return frame.image;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> removeMemberMarker(String uid) async {
+    if (!_memberMarkerMap.containsKey(uid)) return;
+    try { await _pointManager!.delete(_memberMarkerMap[uid]!); } catch (_) {}
+    _memberMarkerMap.remove(uid);
+  }
+
   Future<void> drawMemberMarkers(
     Map<String, mapbox.Position> locations,
     Map<String, String> roles, {
     String? skipUid,
+    Map<String, String> photoUrls = const {},
   }) async {
     if (_pointManager == null) return;
 
@@ -295,15 +384,29 @@ class MapStateProvider extends ChangeNotifier {
       if (uid == skipUid) continue;
       final pos = entry.value;
       final role = roles[uid] ?? 'member';
+      final photoUrl = photoUrls[uid] ?? '';
 
-      if (_memberMarkerMap.containsKey(uid) && _lastMemberRoles[uid] == role) {
+      // Load/update cached avatar khi photoUrl thay đổi
+      if (photoUrl.isNotEmpty && _lastMemberPhotoUrls[uid] != photoUrl) {
+        final loaded = await _loadAvatar(photoUrl);
+        if (loaded != null) _cachedAvatarImages[uid] = loaded;
+      }
+
+      final needsRebuild = _lastMemberRoles[uid] != role ||
+          _lastMemberPhotoUrls[uid] != photoUrl;
+
+      if (_memberMarkerMap.containsKey(uid) && !needsRebuild) {
         _memberMarkerMap[uid]!.geometry = mapbox.Point(coordinates: pos);
         try { await _pointManager!.update(_memberMarkerMap[uid]!); } catch (_) {}
       } else {
         if (_memberMarkerMap.containsKey(uid)) {
           try { await _pointManager!.delete(_memberMarkerMap[uid]!); } catch (_) {}
         }
-        final image = await MarkerBuilder.buildMemberBubble(role: role);
+        final image = await MarkerBuilder.buildMemberBubble(
+          ringColor: BadgeHelper.roleRingColor(role),
+          roleLabel: BadgeHelper.roleLabel(role),
+          avatarImage: _cachedAvatarImages[uid],
+        );
         _memberMarkerMap[uid] = await _pointManager!.create(mapbox.PointAnnotationOptions(
           geometry: mapbox.Point(coordinates: pos),
           image: image,
@@ -313,6 +416,9 @@ class MapStateProvider extends ChangeNotifier {
     }
 
     _lastMemberRoles = Map.from(roles);
+    _lastMemberPhotoUrls = Map.from({
+      for (final uid in locations.keys) uid: photoUrls[uid] ?? '',
+    });
   }
 
   Future<void> drawMultipleRoutesPreview() async {
@@ -434,24 +540,38 @@ class MapStateProvider extends ChangeNotifier {
     super.dispose();
   }
 
-  Future<void> clearAll() async {
+  Future<void> clearAll({bool keepMemberMarkers = false}) async {
     _fullRouteCoords = [];
     _lastTrimPos = null;
     isOffRoute = false;
+    isNavigating = false;
     _isFollowing = false;
     weatherWarnings = [];
     previewDestName = null;
-    _navArrow = null;
-    _navArrowImage = null;
+    _initialDistanceKm = 0.0;
+    _initialDurationMins = 0;
+    remainingDistanceKm = 0.0;
+    remainingDurationMins = 0;
     if (_pointManager != null) {
-      await _pointManager!.deleteAll();
-      _memberMarkerMap.clear();
-      _lastMemberRoles.clear();
+      if (!keepMemberMarkers) {
+        await _pointManager!.deleteAll();
+        _memberMarkerMap.clear();
+        _lastMemberRoles.clear();
+        _lastMemberPhotoUrls.clear();
+        _cachedAvatarImages.clear();
+      } else {
+        if (_navArrow != null) try { await _pointManager!.delete(_navArrow!); } catch (_) {}
+        for (final m in _destMarkers) try { await _pointManager!.delete(m); } catch (_) {}
+        for (final m in _weatherMarkers) try { await _pointManager!.delete(m); } catch (_) {}
+        for (final m in _riskMarkers) try { await _pointManager!.delete(m); } catch (_) {}
+      }
       _destMarkers.clear();
       _weatherMarkers.clear();
       _riskMarkers.clear();
       _destinationPosition = null;
     }
+    _navArrow = null;
+    _navArrowImage = null;
     if (_polylineManager != null) {
       await _polylineManager!.deleteAll();
     }

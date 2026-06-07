@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
+import 'package:qr_flutter/qr_flutter.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:provider/provider.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mapbox;
@@ -14,9 +17,12 @@ import '../../main_map/providers/map_state_provider.dart';
 import '../../map_routing/widgets/routing_search_bar.dart';
 import '../../map_routing/services/weather_api.dart';
 import '../../map_routing/widgets/risk_report_sheet.dart';
-import '../widgets/voice_fab.dart';
 import '../../../core/utils/route_utils.dart';
+import '../../../core/services/tts_service.dart';
+import '../../../core/services/sound_service.dart';
+import '../../../core/providers/voice_command_provider.dart';
 import '../../map_routing/services/gemini_ai_api.dart';
+import '../../map_routing/services/geocoding_api.dart';
 import '../../voice/services/voice_action_dispatcher.dart';
 
 class GroupRadarOverlay extends StatefulWidget {
@@ -53,7 +59,10 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
   String? _lastDestName;
 
   Map<String, dynamic> _memberInfo = {};
+  Set<String> _prevMemberUids = {};
   Map<String, mapbox.Position> _memberLocations = {};
+  final Set<String> _announcedRiskIds = {};
+  int _lastRiskCheckMs = 0;
 
   String? _loadedRouteKey;
 
@@ -62,15 +71,28 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
   List<Map<String, dynamic>> _offRouteWarnings = [];
   DateTime? _lastGapCheck;
 
-  bool _isInfoExpanded = false;
   bool _isLoading = false;
+  bool _navigationStarting = false;
+  bool _panelOpen = false;
+  DateTime? _navStartTime;
+  static const double _panelWidth = 256.0;
+  static const double _panelHandleWidth = 16.0;
   List<Map<String, double>> _polylineData = [];
+
+  VoiceCommandProvider? _voiceProv;
+  int _lastVoiceVersion = 0;
+  MapStateProvider? _mapProvider;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) context.read<MapStateProvider>().setGroupMode(true);
+      if (!mounted) return;
+      _mapProvider = context.read<MapStateProvider>();
+      _mapProvider!.setGroupMode(true);
+      _mapProvider!.setMapTapHandler(_onMapTap);
+      _voiceProv = context.read<VoiceCommandProvider>();
+      _voiceProv!.addListener(_onVoiceCommand);
     });
     _startMyGpsTracker();
     _listenToFirebaseStreams();
@@ -99,9 +121,35 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
         }
         if (mapProvider.isNavigating) {
           unawaited(mapProvider.setNavArrow(_myLastPos!));
+          _checkNearbyRisks();
         }
       }
     });
+  }
+
+  void _checkNearbyRisks() {
+    if (_myLastPos == null) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now - _lastRiskCheckMs < 5000) return;
+    _lastRiskCheckMs = now;
+
+    final seen = <String>{};
+    final allRisks = [..._realtimeRisks, ..._crossGroupRisks]
+        .where((r) => seen.add(r.id))
+        .toList();
+    for (final risk in allRisks) {
+      if (_announcedRiskIds.contains(risk.id)) continue;
+      final dist = Geolocator.distanceBetween(
+        _myLastPos!.lat.toDouble(), _myLastPos!.lng.toDouble(),
+        risk.lat, risk.lng,
+      );
+      if (dist <= 500) {
+        _announcedRiskIds.add(risk.id);
+        final distText = dist < 100 ? 'ngay phía trước' : 'phía trước ${dist.round()} mét';
+        final note = risk.note.isNotEmpty ? ', ${risk.note}' : '';
+        unawaited(TtsService().speak('$distText có ${risk.vi}$note'));
+      }
+    }
   }
 
   void _listenToFirebaseStreams() {
@@ -109,8 +157,21 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
       if (!doc.exists) return;
       final data = doc.data()!;
 
+      final newMemberInfo = data['memberInfo'] as Map<String, dynamic>? ?? {};
+      final newUids = newMemberInfo.keys.toSet();
+      if (_prevMemberUids.isNotEmpty) {
+        for (final uid in newUids.difference(_prevMemberUids)) {
+          if (uid == widget.currentUser.id) continue;
+          unawaited(SoundService().playMemberJoin());
+        }
+        for (final uid in _prevMemberUids.difference(newUids)) {
+          if (uid == widget.currentUser.id) continue;
+          unawaited(SoundService().playMemberLeave());
+        }
+      }
+      _prevMemberUids = newUids;
       setState(() {
-        _memberInfo = data['memberInfo'] as Map<String, dynamic>? ?? {};
+        _memberInfo = newMemberInfo;
       });
 
       final routeData = data['route'] as Map<String, dynamic>?;
@@ -126,33 +187,39 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
         // Tạo key từ điểm đầu + cuối để phát hiện route mới
         final routeKey = coords.isEmpty ? '' : '${coords.first.lng},${coords.first.lat}-${coords.last.lng},${coords.last.lat}';
 
-        if (mounted) {
+        // Chỉ xử lý route mới — leader đã set _loadedRouteKey trước khi push nên sẽ skip,
+        // tránh overwrite _fullRouteCoords bằng coords đã downsample từ Firebase
+        if (mounted && routeKey != _loadedRouteKey) {
+          _loadedRouteKey = routeKey;
           final mapProvider = context.read<MapStateProvider>();
+          _navigationStarting = true;
+          await mapProvider.removeMemberMarker(widget.currentUser.id);
           mapProvider.setFullRoute(coords);
+          mapProvider.setRouteStatsFromCoords(coords);
           await mapProvider.drawRoutePolyline(coords);
           mapProvider.startNavigating();
+          _navStartTime ??= DateTime.now();
+          if (_myLastPos != null) unawaited(mapProvider.setNavArrow(_myLastPos!));
+          _updateMapMembers();
+          _navigationStarting = false;
           final endName = routeData['endName']?.toString() ?? 'Đích đến';
           if (coords.isNotEmpty) {
             await mapProvider.drawDestinationMarker(coords.last, endName, flyToMarker: false);
           }
           mapProvider.flyToCurrentLocation();
 
-          // Load risk + thời tiết khi route mới (member join sau hoặc leader đổi tuyến)
-          if (routeKey != _loadedRouteKey) {
-            _loadedRouteKey = routeKey;
-            final polylineData = polyList
-                .map<Map<String, double>>((p) => {
-                      'lng': (p['lng'] as num).toDouble(),
-                      'lat': (p['lat'] as num).toDouble(),
-                    })
-                .toList();
-            _crossGroupRisks = await _warningRepo.getRiskLabelsNearRoute(
-              polyline: polylineData,
-            );
-            _redrawAllRisks();
-            _startCrossGroupRiskTimer(polylineData);
-            await _loadWeatherAlongRoute(coords);
-          }
+          final polylineData = polyList
+              .map<Map<String, double>>((p) => {
+                    'lng': (p['lng'] as num).toDouble(),
+                    'lat': (p['lat'] as num).toDouble(),
+                  })
+              .toList();
+          _crossGroupRisks = await _warningRepo.getRiskLabelsNearRoute(
+            polyline: polylineData,
+          );
+          _redrawAllRisks();
+          _startCrossGroupRiskTimer(polylineData);
+          await _loadWeatherAlongRoute(coords);
         }
       }
     });
@@ -189,14 +256,20 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
   void _updateMapMembers() {
     if (!mounted) return;
     final roles = <String, String>{};
+    final photoUrls = <String, String>{};
     _memberInfo.forEach((uid, info) {
-      if (info is Map) roles[uid] = info['role']?.toString() ?? 'member';
+      if (info is Map) {
+        roles[uid] = info['role']?.toString() ?? 'member';
+        final url = info['photoURL']?.toString();
+        if (url != null && url.isNotEmpty) photoUrls[uid] = url;
+      }
     });
     final mapProvider = context.read<MapStateProvider>();
     mapProvider.drawMemberMarkers(
       _memberLocations,
       roles,
-      skipUid: mapProvider.isNavigating ? widget.currentUser.id : null,
+      skipUid: (mapProvider.isNavigating || _navigationStarting) ? widget.currentUser.id : null,
+      photoUrls: photoUrls,
     );
   }
 
@@ -252,7 +325,7 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
       _showSnackbar('Chưa lấy được GPS hiện tại của bạn!'); return;
     }
     final mapProvider = context.read<MapStateProvider>();
-    await mapProvider.clearAll();
+    await mapProvider.clearAll(keepMemberMarkers: true);
     mapProvider.clearRoutes();
     await mapProvider.drawDestinationMarker(destPos, placeName);
     setState(() { _lastDestPos = destPos; _lastDestName = placeName; _polylineData = []; });
@@ -263,6 +336,7 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
     setState(() => _isLoading = true);
     try {
       final routes = await RouteUtils.getMultipleMapboxRoutes(_myLastPos!, _lastDestPos!);
+      if (!mounted) return;
       if (routes.isEmpty) { _showSnackbar('Không tìm thấy đường đi tới điểm này!'); return; }
       final mapProvider = context.read<MapStateProvider>();
       mapProvider.setRoutesData(routes, _lastDestName ?? 'Điểm đến');
@@ -322,14 +396,28 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
 
     if (weatherWarnings.isNotEmpty && mounted) {
       final mapProvider = context.read<MapStateProvider>();
+      final messenger = ScaffoldMessenger.of(context);
       await mapProvider.drawWeatherMarkers(weatherWarnings);
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         SnackBar(
           content: Text('Đã thêm ${weatherWarnings.length} điểm thời tiết'),
           duration: const Duration(seconds: 2),
         ),
       );
     }
+  }
+
+  void _onMapTap(mapbox.Position pos) async {
+    if (!mounted) return;
+    final mapProvider = context.read<MapStateProvider>();
+    if (mapProvider.isNavigating || _isLoading) return;
+    if (widget.currentUser.role != UserRole.leader) return;
+    final name = await GeocodingApi.reverseGeocode(
+      pos.lat.toDouble(),
+      pos.lng.toDouble(),
+    );
+    if (!mounted) return;
+    _handleDestinationSelected(pos, name);
   }
 
   void _handleVoiceResult(String text) async {
@@ -402,14 +490,22 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
 
   Future<void> _startGroupNavigation(MapStateProvider mapProvider) async {
     if (mapProvider.availableRoutes.isEmpty) return;
+
+    // Xoá marker của chính mình trước mọi thứ — tránh overlap với nav arrow
+    _navigationStarting = true;
+    await mapProvider.removeMemberMarker(widget.currentUser.id);
+
     final chosenRoute = mapProvider.availableRoutes[mapProvider.selectedRouteIndex];
     final geometry = chosenRoute['geometry']['coordinates'] as List;
     final routeCoords = geometry
         .map((c) => mapbox.Position((c[0] as num).toDouble(), (c[1] as num).toDouble()))
         .toList();
 
+    final distKm = (chosenRoute['distance'] as num).toDouble() / 1000.0;
+    final durMins = ((chosenRoute['duration'] as num).toDouble() / 60.0).round();
     mapProvider.clearRoutesData();
     mapProvider.setFullRoute(routeCoords);
+    mapProvider.setRouteStats(distKm, durMins);
     await mapProvider.drawRoutePolyline(routeCoords);
 
     if (widget.roomId.isNotEmpty) {
@@ -421,8 +517,18 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
       );
     }
 
+    // Set key trước khi push Firebase để listener không overwrite _fullRouteCoords
+    _loadedRouteKey = routeCoords.isEmpty
+        ? ''
+        : '${routeCoords.first.lng},${routeCoords.first.lat}-${routeCoords.last.lng},${routeCoords.last.lat}';
+
     if (_polylineData.isNotEmpty) _startCrossGroupRiskTimer(_polylineData);
+    _announcedRiskIds.clear();
     mapProvider.startNavigating();
+    _navStartTime ??= DateTime.now();
+    if (_myLastPos != null) unawaited(mapProvider.setNavArrow(_myLastPos!));
+    _updateMapMembers();
+    _navigationStarting = false;
     mapProvider.flyToCurrentLocation();
   }
 
@@ -449,8 +555,18 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
     );
   }
 
+  void _onVoiceCommand() {
+    if (!mounted) return;
+    final prov = _voiceProv!;
+    if (prov.version == _lastVoiceVersion) return;
+    _lastVoiceVersion = prov.version;
+    _handleVoiceResult(prov.lastCommand);
+  }
+
   @override
   void dispose() {
+    _voiceProv?.removeListener(_onVoiceCommand);
+    _mapProvider?.setMapTapHandler(null);
     _gpsSub?.cancel();
     _roomDataSub?.cancel();
     _memberLocationsSub?.cancel();
@@ -460,6 +576,74 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
         .ref('gps/${widget.roomId}/${widget.currentUser.id}')
         .remove();
     super.dispose();
+  }
+
+  ({String uid, String endName, double totalKm, double traveledKm, int elapsedMins, bool completed})? _captureNavSnapshot() {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    final mapProvider = _mapProvider;
+    if (uid == null || _navStartTime == null || mapProvider == null) return null;
+    if (!mapProvider.isNavigating) return null;
+    final totalKm = mapProvider.initialDistanceKm;
+    if (totalKm < 0.1) return null;
+    final remainingKm = mapProvider.remainingDistanceKm;
+    final snapshot = (
+      uid: uid,
+      endName: mapProvider.previewDestName ?? 'Điểm đến',
+      totalKm: totalKm,
+      traveledKm: (totalKm - remainingKm).clamp(0.0, totalKm),
+      elapsedMins: DateTime.now().difference(_navStartTime!).inMinutes,
+      completed: remainingKm < 0.5,
+    );
+    _navStartTime = null;
+    return snapshot;
+  }
+
+  Future<void> _saveTripFromSnapshot(({String uid, String endName, double totalKm, double traveledKm, int elapsedMins, bool completed}) s) async {
+    try {
+      final db = FirebaseFirestore.instance;
+      final batch = db.batch();
+      batch.set(db.collection('users').doc(s.uid).collection('trips').doc(), {
+        'endName': s.endName,
+        'distanceKm': s.totalKm,
+        'traveledKm': s.traveledKm,
+        'durationMins': s.elapsedMins,
+        'date': FieldValue.serverTimestamp(),
+        'completed': s.completed,
+      });
+      batch.set(db.collection('users').doc(s.uid), {
+        'totalKm': FieldValue.increment(s.traveledKm),
+        'totalTrips': FieldValue.increment(1),
+      }, SetOptions(merge: true));
+      await batch.commit();
+    } catch (_) {}
+  }
+
+  void _showQrDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (_) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Mã QR phòng', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              Text(widget.roomId, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, letterSpacing: 6, color: Colors.blue)),
+              const SizedBox(height: 16),
+              QrImageView(
+                data: widget.roomId,
+                version: QrVersions.auto,
+                size: 200,
+              ),
+              const SizedBox(height: 12),
+              const Text('Thành viên quét mã này để vào phòng', style: TextStyle(color: Colors.grey, fontSize: 13), textAlign: TextAlign.center),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -474,139 +658,185 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
             right: 16,
             child: RoutingSearchBar(
               onDestinationSelected: _handleDestinationSelected,
-              onClear: () => context.read<MapStateProvider>().clearAll(),
+              onClear: () => context.read<MapStateProvider>().clearAll(keepMemberMarkers: true),
             ),
           ),
 
-          Positioned(
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 260),
+            curve: Curves.easeInOut,
             top: 90,
-            left: 16,
-            child: GestureDetector(
-              onTap: () => setState(() => _isInfoExpanded = !_isInfoExpanded),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 300),
-                curve: Curves.easeInOut,
-                width: _isInfoExpanded ? 240 : 150,
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.95),
-                  borderRadius: BorderRadius.circular(12),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.15),
-                      blurRadius: 8,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(Icons.tag, color: Colors.blue, size: 18),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(
-                            'Phòng: ${widget.roomId}',
-                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                            overflow: TextOverflow.ellipsis,
-                          ),
+            left: _panelOpen ? 0.0 : -(_panelWidth - _panelHandleWidth),
+            width: _panelWidth,
+            child: SizedBox(
+              width: _panelWidth,
+              child: Stack(
+                children: [
+                  SizedBox(
+                    width: _panelWidth - _panelHandleWidth,
+                    child: Container(
+                      constraints: const BoxConstraints(maxHeight: 320),
+                      decoration: const BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.only(
+                          topRight: Radius.circular(12),
+                          bottomRight: Radius.circular(12),
                         ),
-                        Icon(
-                          _isInfoExpanded ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
-                          color: Colors.grey,
-                        ),
-                      ],
-                    ),
-                    if (_isInfoExpanded) ...[
-                      const Divider(height: 16),
-                      Row(
+                        boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(4, 0))],
+                      ),
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.fromLTRB(12, 16, 8, 12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Icon(
-                            _isTooFar ? Icons.gpp_bad : Icons.verified_user,
-                            color: _isTooFar ? Colors.red : Colors.green,
-                            size: 16,
+                          Row(
+                            children: [
+                              const Icon(Icons.tag, color: Colors.blue, size: 16),
+                              const SizedBox(width: 4),
+                              Expanded(
+                                child: Text(
+                                  'Phòng: ${widget.roomId}',
+                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              GestureDetector(
+                                onTap: () => _showQrDialog(context),
+                                child: const Icon(Icons.qr_code, color: Colors.blue, size: 20),
+                              ),
+                            ],
                           ),
-                          const SizedBox(width: 6),
-                          Expanded(
-                            child: Text(
-                              'Đội hình: ${_isTooFar ? "Đứt đoàn" : "Ổn định"}',
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.bold,
+                          const SizedBox(height: 10),
+                          Row(
+                            children: [
+                              Icon(
+                                _isTooFar ? Icons.gpp_bad : Icons.verified_user,
                                 color: _isTooFar ? Colors.red : Colors.green,
+                                size: 15,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                'Đội hình: ${_isTooFar ? "Đứt đoàn" : "Ổn định"}',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: _isTooFar ? Colors.red : Colors.green,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const Divider(height: 16),
+                          Text(
+                            'Thành viên (${_memberInfo.length})',
+                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                          ),
+                          const SizedBox(height: 8),
+                          ..._memberInfo.entries.map((entry) {
+                            final info = entry.value as Map;
+                            final name = info['displayName']?.toString() ?? 'Ẩn danh';
+                            final role = info['role']?.toString() ?? 'member';
+                            final photoUrl = info['photoURL']?.toString() ?? '';
+                            final roleColor = role == 'leader'
+                                ? Colors.blue
+                                : role == 'sweeper'
+                                    ? Colors.green
+                                    : Colors.orange;
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 10),
+                              child: Row(
+                                children: [
+                                  CircleAvatar(
+                                    radius: 12,
+                                    backgroundImage: photoUrl.isNotEmpty ? NetworkImage(photoUrl) : null,
+                                    backgroundColor: roleColor.withValues(alpha: 0.15),
+                                    child: photoUrl.isEmpty
+                                        ? Text(
+                                            name.isNotEmpty ? name[0].toUpperCase() : '?',
+                                            style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: roleColor),
+                                          )
+                                        : null,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      name,
+                                      style: const TextStyle(fontSize: 13),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: roleColor.withValues(alpha: 0.12),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Text(
+                                      role.toUpperCase(),
+                                      style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: roleColor),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }),
+                          const Divider(height: 16),
+                          SizedBox(
+                            width: double.infinity,
+                            child: OutlinedButton.icon(
+                              onPressed: () {
+                                final snapshot = _captureNavSnapshot();
+                                if (snapshot != null) unawaited(_saveTripFromSnapshot(snapshot));
+                                widget.onLeaveRoom();
+                              },
+                              icon: const Icon(Icons.logout, size: 15, color: Colors.red),
+                              label: const Text(
+                                'Thoát phòng',
+                                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.red),
+                              ),
+                              style: OutlinedButton.styleFrom(
+                                side: BorderSide(color: Colors.red.withValues(alpha: 0.5)),
+                                padding: const EdgeInsets.symmetric(vertical: 8),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                               ),
                             ),
                           ),
+                          const SizedBox(height: 4),
                         ],
                       ),
-                      const SizedBox(height: 12),
-                      Text(
-                        'Thành viên (${_memberInfo.length}):',
-                        style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.black87,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Container(
-                        constraints: const BoxConstraints(maxHeight: 150),
-                        child: SingleChildScrollView(
-                          child: Column(
-                            children: _memberInfo.entries.map((entry) {
-                              final info = entry.value as Map;
-                              final name = info['displayName']?.toString() ?? 'Ẩn danh';
-                              final role = info['role']?.toString() ?? 'member';
-                              final roleColor = role == 'leader'
-                                  ? Colors.blue
-                                  : role == 'sweeper'
-                                      ? Colors.green
-                                      : Colors.orange;
-                              return Padding(
-                                padding: const EdgeInsets.only(bottom: 6.0),
-                                child: Row(
-                                  children: [
-                                    Icon(Icons.two_wheeler, size: 14, color: roleColor),
-                                    const SizedBox(width: 6),
-                                    Expanded(
-                                      child: Text(
-                                        name,
-                                        style: const TextStyle(fontSize: 13),
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                    ),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                                      decoration: BoxDecoration(
-                                        color: roleColor.withValues(alpha: 0.1),
-                                        borderRadius: BorderRadius.circular(4),
-                                      ),
-                                      child: Text(
-                                        role.toUpperCase(),
-                                        style: TextStyle(
-                                          fontSize: 9,
-                                          fontWeight: FontWeight.bold,
-                                          color: roleColor,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              );
-                            }).toList(),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
+                    ),
+                  ),
                 ),
-              ),
+                Positioned(
+                  left: _panelWidth - _panelHandleWidth,
+                  top: 0,
+                  bottom: 0,
+                  width: _panelHandleWidth,
+                  child: GestureDetector(
+                    onTap: () => setState(() => _panelOpen = !_panelOpen),
+                    onHorizontalDragEnd: (d) {
+                      final v = d.primaryVelocity ?? 0;
+                      if (v > 150) setState(() => _panelOpen = true);
+                      else if (v < -150) setState(() => _panelOpen = false);
+                    },
+                    behavior: HitTestBehavior.translucent,
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Container(
+                        width: 6,
+                        height: 48,
+                        margin: const EdgeInsets.only(left: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.grey[500],
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
+          ),
           ),
 
           if (_isTooFar)
@@ -634,115 +864,105 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
           if (_lastDestPos != null && mapProvider.availableRoutes.isEmpty &&
               !mapProvider.isNavigating && !_isLoading &&
               widget.currentUser.role == UserRole.leader)
-            Positioned(
-              bottom: 100,
-              left: 16,
-              right: 16,
-              child: _GroupBottomCard(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(Icons.location_on, color: Colors.red, size: 18),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            mapProvider.previewDestName ?? 'Điểm đến',
-                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+            _GroupBottomCard(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.location_on, color: Colors.red, size: 18),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          mapProvider.previewDestName ?? 'Điểm đến',
+                          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: _getDirections,
+                          icon: const Icon(Icons.directions, color: Colors.white, size: 18),
+                          label: const Text('Đường đi', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.blue[700],
+                            minimumSize: const Size(0, 48),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
                           ),
                         ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: ElevatedButton.icon(
-                            onPressed: _getDirections,
-                            icon: const Icon(Icons.directions, color: Colors.white, size: 18),
-                            label: const Text('Đường đi', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.blue[700],
-                              minimumSize: const Size(0, 48),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-                            ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: () async {
+                            await _getDirections();
+                            if (!mounted || mapProvider.availableRoutes.isEmpty) return;
+                            await _startGroupNavigation(mapProvider);
+                          },
+                          icon: const Icon(Icons.two_wheeler, color: Colors.white, size: 18),
+                          label: const Text('Bắt đầu', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.green[700],
+                            minimumSize: const Size(0, 48),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
                           ),
                         ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: ElevatedButton.icon(
-                            onPressed: () async {
-                              await _getDirections();
-                              if (!mounted || mapProvider.availableRoutes.isEmpty) return;
-                              await _startGroupNavigation(mapProvider);
-                            },
-                            icon: const Icon(Icons.two_wheeler, color: Colors.white, size: 18),
-                            label: const Text('Bắt đầu đi', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.green[700],
-                              minimumSize: const Size(0, 48),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
+                      ),
+                    ],
+                  ),
+                ],
               ),
             ),
 
           if (mapProvider.availableRoutes.isNotEmpty && !mapProvider.isNavigating &&
               widget.currentUser.role == UserRole.leader)
-            Positioned(
-              bottom: 100,
-              left: 16,
-              right: 16,
-              child: _GroupBottomCard(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: Row(
-                        children: List.generate(
-                          mapProvider.availableRoutes.length,
-                          (index) => Padding(
-                            padding: const EdgeInsets.only(right: 8.0),
-                            child: ChoiceChip(
-                              label: Text('Tuyến ${index + 1}',
-                                  style: const TextStyle(fontWeight: FontWeight.bold)),
-                              selected: mapProvider.selectedRouteIndex == index,
-                              selectedColor: Colors.blue.withValues(alpha: 0.3),
-                              onSelected: (selected) async {
-                                if (!selected || index == mapProvider.selectedRouteIndex) return;
-                                mapProvider.selectRoute(index);
-                                await mapProvider.drawMultipleRoutesPreview();
-                                await _loadRouteDetails(mapProvider.availableRoutes, index);
-                              },
-                            ),
+            _GroupBottomCard(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: List.generate(
+                        mapProvider.availableRoutes.length,
+                        (index) => Padding(
+                          padding: const EdgeInsets.only(right: 8.0),
+                          child: ChoiceChip(
+                            label: Text('Tuyến ${index + 1}',
+                                style: const TextStyle(fontWeight: FontWeight.bold)),
+                            selected: mapProvider.selectedRouteIndex == index,
+                            selectedColor: Colors.blue.withValues(alpha: 0.3),
+                            onSelected: (selected) async {
+                              if (!selected || index == mapProvider.selectedRouteIndex) return;
+                              mapProvider.selectRoute(index);
+                              await mapProvider.drawMultipleRoutesPreview();
+                              await _loadRouteDetails(mapProvider.availableRoutes, index);
+                            },
                           ),
                         ),
                       ),
                     ),
-                    const SizedBox(height: 16),
-                    ElevatedButton.icon(
-                      onPressed: () => _startGroupNavigation(mapProvider),
-                      icon: const Icon(Icons.two_wheeler, color: Colors.white),
-                      label: const Text('Bắt đầu đi cùng nhóm',
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.blue[700],
-                        minimumSize: const Size(double.infinity, 50),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-                        elevation: 4,
-                      ),
+                  ),
+                  const SizedBox(height: 16),
+                  ElevatedButton.icon(
+                    onPressed: () => _startGroupNavigation(mapProvider),
+                    icon: const Icon(Icons.two_wheeler, color: Colors.white),
+                    label: const Text('Bắt đầu',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blue[700],
+                      minimumSize: const Size(double.infinity, 50),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                      elevation: 4,
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
 
@@ -772,8 +992,9 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
                         onPressed: () async {
                           final dest = _lastDestPos!;
                           final name = _lastDestName ?? 'Điểm đến';
-                          await context.read<MapStateProvider>().clearAll();
-                          context.read<MapStateProvider>().clearRoutes();
+                          final provider = context.read<MapStateProvider>();
+                          await provider.clearAll(keepMemberMarkers: true);
+                          provider.clearRoutes();
                           _handleDestinationSelected(dest, name);
                         },
                         child: const Text(
@@ -790,54 +1011,71 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
               ),
             ),
 
-          Align(
-            alignment: Alignment.centerRight,
-            child: Padding(
-              padding: const EdgeInsets.only(right: 16.0),
+          if (mapProvider.isNavigating)
+            Align(
+              alignment: Alignment.bottomCenter,
               child: Container(
+                margin: const EdgeInsets.all(16),
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
                 decoration: BoxDecoration(
                   color: Colors.white,
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(color: Colors.redAccent.withValues(alpha: 0.4), blurRadius: 15, spreadRadius: 2),
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, -2))],
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            mapProvider.remainingDurationMins > 60
+                                ? '${mapProvider.remainingDurationMins ~/ 60} giờ ${mapProvider.remainingDurationMins % 60} phút'
+                                : '${mapProvider.remainingDurationMins} phút',
+                            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.green),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '${mapProvider.remainingDistanceKm.toStringAsFixed(1)} km • Đi bằng xe máy',
+                            style: const TextStyle(fontSize: 14, color: Colors.grey),
+                          ),
+                        ],
+                      ),
+                    ),
                   ],
                 ),
-                child: VoiceFab(onVoiceResult: _handleVoiceResult),
               ),
             ),
-          ),
 
-          Positioned(
-            bottom: 30,
-            left: 20,
-            child: FloatingActionButton(
-              heroTag: 'back_fab',
-              backgroundColor: Colors.white,
-              onPressed: widget.onLeaveRoom,
-              child: const Icon(Icons.arrow_back, color: Colors.black),
+          if (mapProvider.isNavigating)
+            Positioned(
+              top: 144,
+              right: 16,
+              child: GestureDetector(
+                onTap: _handleRiskReport,
+                child: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                    boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 6, offset: Offset(0, 2))],
+                  ),
+                  child: const Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 22),
+                ),
+              ),
             ),
-          ),
-
-          Positioned(
-            bottom: 30,
-            left: 90,
-            child: FloatingActionButton(
-              heroTag: 'risk_fab',
-              backgroundColor: Colors.orange[700],
-              onPressed: _handleRiskReport,
-              child: const Icon(Icons.warning_amber_rounded, color: Colors.white),
-            ),
-          ),
 
           if (!mapProvider.isNavigating || !mapProvider.isFollowing)
             Positioned(
-              bottom: 200,
+              top: mapProvider.isNavigating ? 194 : 144,
               right: 16,
               child: GestureDetector(
                 onTap: () => context.read<MapStateProvider>().flyToCurrentLocation(),
                 child: Container(
-                  width: 44,
-                  height: 44,
+                  width: 40,
+                  height: 40,
                   decoration: BoxDecoration(
                     color: Colors.white,
                     shape: BoxShape.circle,
@@ -863,14 +1101,18 @@ class _GroupBottomCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 4))],
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 24, left: 16, right: 16),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, -2))],
+        ),
+        child: child,
       ),
-      child: child,
     );
   }
 }

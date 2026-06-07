@@ -1,5 +1,4 @@
 import 'package:cloud_functions/cloud_functions.dart';
-import 'package:flutter/foundation.dart';
 import 'package:route_mate_app/core/services/firebase_functions_helper.dart';
 
 /// Gọi Cloud Function `voiceCommand` của backend M5.
@@ -36,9 +35,6 @@ class GeminiAiApi {
         final vi = dataMap['vi']?.toString() ?? '';
         final responseText = dataMap['responseText']?.toString() ?? '';
         final autoSaved = dataMap['autoSaved'] == true;
-        debugPrint(
-          '[GeminiAiApi] Risk: ${dataMap['category']}/${dataMap['subtype']} autoSaved=$autoSaved',
-        );
         return {
           'type': type,
           'action': 'report_risk',
@@ -59,8 +55,6 @@ class GeminiAiApi {
           ? Map<String, dynamic>.from(dataMap['params'] as Map)
           : <String, dynamic>{};
 
-      debugPrint('[GeminiAiApi] Action: $action | Response: $responseText');
-
       return {
         'type': type,
         'action': action,
@@ -77,11 +71,7 @@ class GeminiAiApi {
         'originalText': params['original_text']?.toString(),
         'risks': params['risks'],
       };
-    } on FirebaseFunctionsException catch (e) {
-      debugPrint('[GeminiAiApi] Lỗi gọi AI Backend: ${e.code} - ${e.message}');
-      return null;
-    } catch (e) {
-      debugPrint('[GeminiAiApi] Lỗi hệ thống: $e');
+    } catch (_) {
       return null;
     }
   }

@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:route_mate_app/core/services/voice_service.dart';
+import '../../../core/services/voice_service.dart';
 
 class VoiceRecordButton extends StatefulWidget {
   final Function(String text) onResult;
 
-  const VoiceRecordButton({Key? key, required this.onResult}) : super(key: key);
+  const VoiceRecordButton({super.key, required this.onResult});
 
   @override
   State<VoiceRecordButton> createState() => _VoiceRecordButtonState();
@@ -68,7 +68,7 @@ class _VoiceRecordButtonState extends State<VoiceRecordButton> {
               color: _isListening ? Colors.redAccent : Colors.transparent,
               shape: BoxShape.circle,
               boxShadow: _isListening
-                  ? [BoxShadow(color: Colors.red.withOpacity(0.5), blurRadius: 15, spreadRadius: 5)]
+                  ? [BoxShadow(color: Colors.red.withValues(alpha: 0.5), blurRadius: 15, spreadRadius: 5)]
                   : [],
             ),
             child: Icon(

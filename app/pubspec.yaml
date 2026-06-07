@@ -42,9 +42,15 @@ dependencies:
   crypto: ^3.0.6               # SHA-256 hash để tạo solo room ID
   flutter_tts: ^4.2.0          # Text-to-Speech cho voice response
   shared_preferences: ^2.3.5   # Lưu session phòng nhóm để khôi phục khi thoát app
+  google_sign_in: ^6.2.2       # Đăng nhập bằng tài khoản Google
 
   # --- 6. GIAO DIỆN ---
   cupertino_icons: ^1.0.8
+  qr_flutter: ^4.1.0            # Tạo QR code
+  mobile_scanner: ^6.0.0        # Quét QR code bằng camera
+  image_picker: ^1.1.2          # Chọn ảnh từ thư viện / camera
+  firebase_storage: ^12.3.7     # Upload ảnh avatar lên Firebase Storage
+  audioplayers: ^6.1.0          # Phát âm thanh chuông thành viên vào/ra nhóm
 
 dev_dependencies:
   flutter_test:
@@ -55,3 +61,5 @@ flutter:
   uses-material-design: true
   assets:
     - .env
+    - assets/images/
+    - assets/sounds/

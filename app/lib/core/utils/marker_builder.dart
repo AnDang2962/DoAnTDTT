@@ -137,7 +137,6 @@ class MarkerBuilder {
     return byteData!.buffer.asUint8List();
   }
 
-  /// Mũi tên điều hướng xanh kiểu Google Maps — trỏ lên, xoay via iconRotate, anchor CENTER.
   static Future<Uint8List> buildNavigationArrow({
     double devicePixelRatio = 3.0,
   }) async {
@@ -188,7 +187,8 @@ class MarkerBuilder {
   }
 
   static Future<Uint8List> buildMemberBubble({
-    required String role,
+    required Color ringColor,
+    String roleLabel = '',
     ui.Image? avatarImage,
     double devicePixelRatio = 3.0,
   }) async {
@@ -203,17 +203,7 @@ class MarkerBuilder {
     const double cy = topPad + R;
     const double tipY = imgH;
 
-    Color baseColor;
-    switch (role.toLowerCase()) {
-      case 'leader':
-        baseColor = const Color(0xFF2196F3);
-        break;
-      case 'sweeper':
-        baseColor = const Color(0xFF4CAF50);
-        break;
-      default:
-        baseColor = const Color(0xFFFF9800);
-    }
+    final Color baseColor = ringColor;
 
     final pinPath = Path()
       ..moveTo(cx, tipY)
@@ -256,6 +246,32 @@ class MarkerBuilder {
         ..style = PaintingStyle.stroke
         ..strokeWidth = 2.5,
     );
+
+    if (roleLabel.isNotEmpty) {
+      const double badgeR = 7.5;
+      final bx = cx + innerR * 0.707;
+      final by = cy + innerR * 0.707;
+
+      canvas.drawCircle(Offset(bx, by), badgeR + 1.5, Paint()..color = Colors.white);
+      canvas.drawCircle(Offset(bx, by), badgeR, Paint()..color = baseColor);
+
+      final badgePainter = TextPainter(
+        text: TextSpan(
+          text: roleLabel,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 8,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      );
+      badgePainter.layout();
+      badgePainter.paint(
+        canvas,
+        Offset(bx - badgePainter.width / 2, by - badgePainter.height / 2),
+      );
+    }
 
     final picture = recorder.endRecording();
     final img = await picture.toImage(

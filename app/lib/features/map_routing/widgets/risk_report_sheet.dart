@@ -47,9 +47,9 @@ class _RiskReportSheetState extends State<RiskReportSheet> {
   static const _categoryColors = {
     'WEATHER': Colors.blue,
     'ACCIDENT': Colors.red,
-    'ROAD_BAD': Colors.brown,
+    'ROAD_BAD': Colors.orange,
     'POLICE': Colors.indigo,
-    'HAZARD_OTHER': Colors.orange,
+    'HAZARD_OTHER': Colors.deepOrange,
   };
 
   // Giữ đúng thứ tự hiển thị bất kể JSON deserialization.

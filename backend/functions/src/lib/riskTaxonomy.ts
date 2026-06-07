@@ -34,21 +34,21 @@ export const RISK_TAXONOMY: Record<RiskCategory, {
 }> = {
   WEATHER: {
     vi: 'Thời tiết xấu',
-    icon: '☔',
+    icon: '🌩️',
     subtypes: [
       { subtype: 'heavy_rain', vi: 'Mưa to', halfLifeH: 1, maxLifetimeH: 2, defaultSeverity: 0.6 },
+      { subtype: 'flooding', vi: 'Ngập nước', halfLifeH: 2, maxLifetimeH: 6, defaultSeverity: 0.8 },
       { subtype: 'fog', vi: 'Sương mù', halfLifeH: 1, maxLifetimeH: 2, defaultSeverity: 0.7 },
       { subtype: 'strong_wind', vi: 'Gió lớn', halfLifeH: 1, maxLifetimeH: 2, defaultSeverity: 0.5 },
-      { subtype: 'flooding', vi: 'Ngập nước', halfLifeH: 2, maxLifetimeH: 6, defaultSeverity: 0.8 },
     ],
   },
   ACCIDENT: {
-    vi: 'Tai nạn / Tắc đường',
-    icon: '⚠️',
+    vi: 'Tai nạn / Va chạm',
+    icon: '💥',
     subtypes: [
-      { subtype: 'accident', vi: 'Tai nạn', halfLifeH: 4, maxLifetimeH: 12, defaultSeverity: 0.9 },
+      { subtype: 'accident', vi: 'Tai nạn giao thông', halfLifeH: 4, maxLifetimeH: 12, defaultSeverity: 0.9 },
       { subtype: 'traffic_jam', vi: 'Tắc đường', halfLifeH: 2, maxLifetimeH: 6, defaultSeverity: 0.5 },
-      { subtype: 'breakdown', vi: 'Xe hỏng/chết máy', halfLifeH: 3, maxLifetimeH: 8, defaultSeverity: 0.6 },
+      { subtype: 'breakdown', vi: 'Xe hỏng / Chết máy', halfLifeH: 3, maxLifetimeH: 8, defaultSeverity: 0.6 },
     ],
   },
   ROAD_BAD: {
@@ -57,27 +57,27 @@ export const RISK_TAXONOMY: Record<RiskCategory, {
     subtypes: [
       { subtype: 'pothole', vi: 'Ổ gà', halfLifeH: 168, maxLifetimeH: 720, defaultSeverity: 0.5 }, // 7d, 30d
       { subtype: 'slippery', vi: 'Đường trơn', halfLifeH: 4, maxLifetimeH: 12, defaultSeverity: 0.7 },
-      { subtype: 'gravel', vi: 'Sỏi đá', halfLifeH: 48, maxLifetimeH: 168, defaultSeverity: 0.5 },
       { subtype: 'construction', vi: 'Đang thi công', halfLifeH: 48, maxLifetimeH: 240, defaultSeverity: 0.6 }, // 10d
+      { subtype: 'gravel', vi: 'Sỏi đá / Đất đá', halfLifeH: 48, maxLifetimeH: 168, defaultSeverity: 0.5 },
     ],
   },
   POLICE: {
-    vi: 'Chốt / Camera CSGT',
-    icon: '🚓',
+    vi: 'CSGT / Kiểm tra',
+    icon: '👮',
     subtypes: [
       { subtype: 'checkpoint', vi: 'Chốt CSGT', halfLifeH: 3, maxLifetimeH: 6, defaultSeverity: 0.7 },
-      { subtype: 'speed_camera', vi: 'Camera tốc độ', halfLifeH: 168, maxLifetimeH: 720, defaultSeverity: 0.5 }, // 7d, 30d (cố định)
       { subtype: 'mobile_patrol', vi: 'Tuần tra di động', halfLifeH: 1, maxLifetimeH: 3, defaultSeverity: 0.7 },
+      { subtype: 'speed_camera', vi: 'Camera tốc độ', halfLifeH: 168, maxLifetimeH: 720, defaultSeverity: 0.5 }, // 7d, 30d (cố định)
     ],
   },
   HAZARD_OTHER: {
     vi: 'Nguy hiểm khác',
-    icon: '🚧',
+    icon: '🆘',
     subtypes: [
-      { subtype: 'landslide', vi: 'Sạt lở', halfLifeH: 12, maxLifetimeH: 48, defaultSeverity: 1.0 },
-      { subtype: 'fallen_tree', vi: 'Cây đổ', halfLifeH: 6, maxLifetimeH: 24, defaultSeverity: 0.8 },
+      { subtype: 'landslide', vi: 'Sạt lở đất đá', halfLifeH: 12, maxLifetimeH: 48, defaultSeverity: 1.0 },
+      { subtype: 'fallen_tree', vi: 'Cây đổ chắn đường', halfLifeH: 6, maxLifetimeH: 24, defaultSeverity: 0.8 },
       { subtype: 'animal', vi: 'Động vật băng đường', halfLifeH: 2, maxLifetimeH: 6, defaultSeverity: 0.5 },
-      { subtype: 'dark_road', vi: 'Đường tối nguy hiểm', halfLifeH: 24, maxLifetimeH: 168, defaultSeverity: 0.4 },
+      { subtype: 'dark_road', vi: 'Đường tối / Mất điện', halfLifeH: 24, maxLifetimeH: 168, defaultSeverity: 0.4 },
     ],
   },
 };

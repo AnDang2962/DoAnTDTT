@@ -1,5 +1,7 @@
+import 'dart:convert';
 import 'package:cloud_functions/cloud_functions.dart';
-import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
+import '../../../core/constants/env_keys.dart';
 import '../../../core/services/firebase_functions_helper.dart';
 
 /// Geocoding API — gọi Cloud Function `geocodePlace` của backend.
@@ -11,6 +13,26 @@ import '../../../core/services/firebase_functions_helper.dart';
 ///   - `searchAutocomplete(query)` — gợi ý type-ahead (limit=5, autocomplete=true)
 ///   - `findExact(query)` — voice exact (limit=1, autocomplete=false)
 class GeocodingApi {
+  /// Reverse geocode — chuyển tọa độ (lat, lng) thành tên địa điểm.
+  static Future<String> reverseGeocode(double lat, double lng) async {
+    try {
+      final token = EnvKeys.mapboxPublicKey;
+      if (token.isEmpty) return 'Vị trí đã chọn';
+      final uri = Uri.parse(
+        'https://api.mapbox.com/geocoding/v5/mapbox.places/$lng,$lat.json'
+        '?types=place,district,locality,address&language=vi&limit=1&access_token=$token',
+      );
+      final res = await http.get(uri).timeout(const Duration(seconds: 5));
+      if (res.statusCode != 200) return 'Vị trí đã chọn';
+      final data = json.decode(res.body) as Map<String, dynamic>;
+      final features = data['features'] as List?;
+      if (features == null || features.isEmpty) return 'Vị trí đã chọn';
+      return features.first['text']?.toString() ?? 'Vị trí đã chọn';
+    } catch (_) {
+      return 'Vị trí đã chọn';
+    }
+  }
+
   /// Type-ahead search cho TextField gõ chữ.
   /// Returns: List of suggestions (max 5).
   static Future<List<GeocodedPlace>> searchAutocomplete(String query) async {
@@ -51,14 +73,8 @@ class GeocodingApi {
         }
       }
 
-      debugPrint(
-          '[GeocodingApi] Tìm "$query" (auto=$autocomplete) → ${places.length} kết quả');
       return places;
-    } on FirebaseFunctionsException catch (e) {
-      debugPrint('[GeocodingApi] ✗ Backend error: ${e.code} - ${e.message}');
-      return [];
-    } catch (e) {
-      debugPrint('[GeocodingApi] ✗ Lỗi: $e');
+    } catch (_) {
       return [];
     }
   }

@@ -29,6 +29,10 @@ service cloud.firestore {
     match /users/{userId} {
       allow read: if isAuthed();
       allow write: if isAuthed() && request.auth.uid == userId;
+
+      match /trips/{tripId} {
+        allow read, write: if isAuthed() && request.auth.uid == userId;
+      }
     }
 
     // === Rate limit counters - chỉ server ===

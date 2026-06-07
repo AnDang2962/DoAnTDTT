@@ -1,5 +1,4 @@
 import 'package:cloud_functions/cloud_functions.dart';
-import 'package:flutter/foundation.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mapbox;
 import '../../../core/services/firebase_functions_helper.dart';
 
@@ -63,11 +62,7 @@ class PlacesApi {
       return places
           .map((p) => NearbyPlace.fromJson(Map<String, dynamic>.from(p as Map)))
           .toList();
-    } on FirebaseFunctionsException catch (e) {
-      debugPrint('[PlacesApi] Lỗi backend: ${e.code} - ${e.message}');
-      return [];
-    } catch (e) {
-      debugPrint('[PlacesApi] Lỗi: $e');
+    } catch (_) {
       return [];
     }
   }

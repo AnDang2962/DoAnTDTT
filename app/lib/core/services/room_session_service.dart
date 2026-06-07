@@ -19,8 +19,6 @@ class RoomSessionService {
     await prefs.setString(_keyUserRole, userRole);
   }
 
-  /// Trả về map với 3 key: roomId, userName, userRole.
-  /// Trả về null nếu chưa có session được lưu.
   static Future<Map<String, String>?> load() async {
     final prefs = await SharedPreferences.getInstance();
     final roomId = prefs.getString(_keyRoomId);

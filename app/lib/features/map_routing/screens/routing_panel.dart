@@ -4,20 +4,23 @@ import 'package:provider/provider.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mapbox;
 import 'package:geolocator/geolocator.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:route_mate_app/core/utils/route_utils.dart';
 import 'package:route_mate_app/core/services/solo_room_service.dart';
 import 'package:route_mate_app/features/main_map/providers/map_state_provider.dart';
 
 import '../services/weather_api.dart';
 import '../../../data/models/warning_marker.dart';
+import '../../../core/services/tts_service.dart';
 import '../../../data/repositories/room_repository.dart';
 import '../../../data/repositories/warning_repository.dart';
 
 import '../widgets/routing_search_bar.dart';
 import '../widgets/risk_report_sheet.dart';
-import '../widgets/voice_record_btn.dart';
 import '../services/gemini_ai_api.dart';
+import '../services/geocoding_api.dart';
 import '../../voice/services/voice_action_dispatcher.dart';
+import '../../../core/providers/voice_command_provider.dart';
 
 class RoutingPanel extends StatefulWidget {
   final String? roomId;
@@ -33,9 +36,7 @@ class _RoutingPanelState extends State<RoutingPanel> {
   bool _isLoading = false;
   mapbox.Position? _previewDestPos;
   mapbox.Position? _myLastPos;
-
-  double _routeDistance = 0.0;
-  int _routeDurationMins = 0;
+  DateTime? _navStartTime;
 
   final RoomRepository _roomRepo = RoomRepository();
   final WarningRepository _warningRepo = WarningRepository();
@@ -46,26 +47,44 @@ class _RoutingPanelState extends State<RoutingPanel> {
   List<WarningMarker> _realtimeRisks = [];
   List<WarningMarker> _crossGroupRisks = [];
   List<Map<String, double>> _polylineData = [];
+  final Set<String> _announcedRiskIds = {};
+  int _lastRiskCheckMs = 0;
 
   void _redrawAllRisks() {
     if (!mounted) return;
     final mapProvider = context.read<MapStateProvider>();
     if (mapProvider.isGroupModeActive) return;
+    if (_previewDestPos == null && !mapProvider.isNavigating) return;
     final merged = <String, WarningMarker>{};
     for (final r in _realtimeRisks) merged[r.id] = r;
     for (final r in _crossGroupRisks) merged[r.id] = r;
     mapProvider.drawRiskMarkers(merged.values.toList(), {});
   }
 
+  VoiceCommandProvider? _voiceProv;
+  int _lastVoiceVersion = 0;
+  MapStateProvider? _mapProvider;
+
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _startSoloRiskListener());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _mapProvider = context.read<MapStateProvider>();
+      _startSoloRiskListener();
+      _voiceProv = context.read<VoiceCommandProvider>();
+      _voiceProv!.addListener(_onVoiceCommand);
+      if (widget.isActive) {
+        _mapProvider!.setMapTapHandler(_onMapTap);
+      }
+    });
   }
 
   @override
   void didUpdateWidget(RoutingPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (widget.isActive != oldWidget.isActive) {
+      _mapProvider?.setMapTapHandler(widget.isActive ? _onMapTap : null);
+    }
     if (!widget.isActive && oldWidget.isActive) {
       _stopNavGpsStream();
       _riskRefreshTimer?.cancel();
@@ -76,8 +95,6 @@ class _RoutingPanelState extends State<RoutingPanel> {
           mapProvider.clearRoutes();
           setState(() {
             _previewDestPos = null;
-            _routeDistance = 0.0;
-            _routeDurationMins = 0;
           });
         }
       }
@@ -130,8 +147,68 @@ class _RoutingPanelState extends State<RoutingPanel> {
       }
       if (mapProvider.isNavigating) {
         unawaited(mapProvider.setNavArrow(_myLastPos!));
+        _checkNearbyRisks();
       }
     });
+  }
+
+  void _checkNearbyRisks() {
+    if (_myLastPos == null) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now - _lastRiskCheckMs < 5000) return;
+    _lastRiskCheckMs = now;
+
+    final allRisks = {..._realtimeRisks.map((r) => r), ..._crossGroupRisks}.toList();
+    for (final risk in allRisks) {
+      if (_announcedRiskIds.contains(risk.id)) continue;
+      final dist = Geolocator.distanceBetween(
+        _myLastPos!.lat.toDouble(), _myLastPos!.lng.toDouble(),
+        risk.lat, risk.lng,
+      );
+      if (dist <= 500) {
+        _announcedRiskIds.add(risk.id);
+        final distText = dist < 100 ? 'ngay phía trước' : 'phía trước ${dist.round()} mét';
+        final note = risk.note.isNotEmpty ? ', ${risk.note}' : '';
+        unawaited(TtsService().speak('$distText có ${risk.vi}$note'));
+      }
+    }
+  }
+
+  ({String uid, String endName, double totalKm, double traveledKm, int elapsedMins, bool completed})? _captureNavSnapshot(MapStateProvider mapProvider) {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || _navStartTime == null) return null;
+    final totalKm = mapProvider.initialDistanceKm;
+    final remainingKm = mapProvider.remainingDistanceKm;
+    final snapshot = (
+      uid: uid,
+      endName: mapProvider.previewDestName ?? 'Điểm đến',
+      totalKm: totalKm,
+      traveledKm: (totalKm - remainingKm).clamp(0.0, totalKm),
+      elapsedMins: DateTime.now().difference(_navStartTime!).inMinutes,
+      completed: remainingKm < 0.5,
+    );
+    _navStartTime = null;
+    return snapshot;
+  }
+
+  Future<void> _saveTripFromSnapshot(({String uid, String endName, double totalKm, double traveledKm, int elapsedMins, bool completed}) s) async {
+    try {
+      final db = FirebaseFirestore.instance;
+      final batch = db.batch();
+      batch.set(db.collection('users').doc(s.uid).collection('trips').doc(), {
+        'endName': s.endName,
+        'distanceKm': s.totalKm,
+        'traveledKm': s.traveledKm,
+        'durationMins': s.elapsedMins,
+        'date': FieldValue.serverTimestamp(),
+        'completed': s.completed,
+      });
+      batch.set(db.collection('users').doc(s.uid), {
+        'totalKm': FieldValue.increment(s.traveledKm),
+        'totalTrips': FieldValue.increment(1),
+      }, SetOptions(merge: true));
+      await batch.commit();
+    } catch (_) {}
   }
 
   void _stopNavGpsStream() {
@@ -141,10 +218,79 @@ class _RoutingPanelState extends State<RoutingPanel> {
 
   @override
   void dispose() {
+    _voiceProv?.removeListener(_onVoiceCommand);
+    _mapProvider?.setMapTapHandler(null);
     _riskSub?.cancel();
     _riskRefreshTimer?.cancel();
     _navGpsSub?.cancel();
     super.dispose();
+  }
+
+  void _onMapTap(mapbox.Position pos) async {
+    if (!mounted) return;
+    final mapProvider = context.read<MapStateProvider>();
+    if (mapProvider.isNavigating || mapProvider.isGroupModeActive || _isLoading) return;
+    final name = await GeocodingApi.reverseGeocode(
+      pos.lat.toDouble(),
+      pos.lng.toDouble(),
+    );
+    if (!mounted) return;
+    await _handleDestinationSelected(pos, name);
+  }
+
+  void _onVoiceCommand() async {
+    if (!mounted) return;
+    // Nhường cho GroupRadarOverlay xử lý khi đang ở chế độ nhóm
+    if (context.read<MapStateProvider>().isGroupModeActive) return;
+    final prov = _voiceProv!;
+    if (prov.version == _lastVoiceVersion) return;
+    _lastVoiceVersion = prov.version;
+    final spokenText = prov.lastCommand;
+    if (spokenText.isEmpty) return;
+
+    Position? currentPos;
+    try {
+      currentPos = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 3),
+      );
+    } catch (_) {
+      currentPos = await Geolocator.getLastKnownPosition();
+    }
+
+    final roomId = _effectiveRoomId;
+    final result = await GeminiAiApi.analyzeCommand(
+      spokenText,
+      roomId: roomId,
+      currentLat: currentPos?.latitude,
+      currentLng: currentPos?.longitude,
+    );
+
+    if (result == null) { _showSnackbar('Không kết nối được AI'); return; }
+    if (!mounted) return;
+
+    final isNavigating = context.read<MapStateProvider>().isNavigating;
+    final resultType = result['type']?.toString() ?? 'command';
+    final resultAction = result['action']?.toString() ?? '';
+
+    // Các lệnh chỉ có ý nghĩa khi đang định tuyến
+    const _navOnlyActions = {'check_weather'};
+    final _isNavOnly = resultType == 'risk' || _navOnlyActions.contains(resultAction);
+
+    if (!isNavigating && _isNavOnly) {
+      _showSnackbar('Bạn chưa bắt đầu định tuyến, không thể thực hiện tác vụ này');
+      return;
+    }
+
+    await VoiceActionDispatcher(
+      context: context,
+      isInGroup: widget.roomId?.isNotEmpty == true,
+      roomId: roomId,
+      currentLat: currentPos?.latitude,
+      currentLng: currentPos?.longitude,
+      currentUserId: FirebaseAuth.instance.currentUser?.uid ?? '',
+      onNavigateTo: _handleDestinationSelected,
+    ).dispatch(result);
   }
 
   Future<void> _handleDestinationSelected(mapbox.Position destPos, String placeName) async {
@@ -185,6 +331,7 @@ class _RoutingPanelState extends State<RoutingPanel> {
       final startPos = mapbox.Position(startLng, startLat);
 
       final routes = await RouteUtils.getMultipleMapboxRoutes(startPos, _previewDestPos!);
+      if (!mounted) return;
       if (routes.isEmpty) { _showSnackbar('Không tìm thấy đường đi tới điểm này!'); return; }
 
       final mapProvider = context.read<MapStateProvider>();
@@ -278,14 +425,14 @@ class _RoutingPanelState extends State<RoutingPanel> {
 
       if (_polylineData.isNotEmpty) _startCrossGroupRiskTimer(_polylineData);
 
+      final distKm = (chosenRoute['distance'] as num).toDouble() / 1000.0;
+      final durMins = ((chosenRoute['duration'] as num).toDouble() / 60.0).round();
+      mapProvider.setRouteStats(distKm, durMins);
       mapProvider.startNavigating();
+      _navStartTime = DateTime.now();
+      _announcedRiskIds.clear();
       _startNavGpsStream();
       mapProvider.flyToCurrentLocation();
-
-      setState(() {
-        _routeDistance = (chosenRoute['distance'] as num).toDouble() / 1000.0;
-        _routeDurationMins = ((chosenRoute['duration'] as num).toDouble() / 60.0).round();
-      });
     } catch (e) {
       _showSnackbar('Lỗi bắt đầu điều hướng: $e');
     } finally {
@@ -387,6 +534,7 @@ class _RoutingPanelState extends State<RoutingPanel> {
   Widget build(BuildContext context) {
     final mapProvider = context.watch<MapStateProvider>();
 
+    final safePad = MediaQuery.of(context).padding.top;
     return Stack(
       children: [
         if (!mapProvider.isNavigating)
@@ -445,7 +593,7 @@ class _RoutingPanelState extends State<RoutingPanel> {
                       child: ElevatedButton.icon(
                         onPressed: _startRouting,
                         icon: const Icon(Icons.two_wheeler, color: Colors.white, size: 18),
-                        label: const Text('Bắt đầu đi', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+                        label: const Text('Bắt đầu', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.green[700],
                           minimumSize: const Size(0, 48),
@@ -470,7 +618,7 @@ class _RoutingPanelState extends State<RoutingPanel> {
                 ElevatedButton.icon(
                   onPressed: _startRouting,
                   icon: const Icon(Icons.two_wheeler, color: Colors.white),
-                  label: const Text('Bắt đầu đi', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
+                  label: const Text('Bắt đầu', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.blue[700],
                     minimumSize: const Size(double.infinity, 50),
@@ -544,14 +692,14 @@ class _RoutingPanelState extends State<RoutingPanel> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          _routeDurationMins > 60
-                              ? '${_routeDurationMins ~/ 60} giờ ${_routeDurationMins % 60} phút'
-                              : '$_routeDurationMins phút',
+                          mapProvider.remainingDurationMins > 60
+                              ? '${mapProvider.remainingDurationMins ~/ 60} giờ ${mapProvider.remainingDurationMins % 60} phút'
+                              : '${mapProvider.remainingDurationMins} phút',
                           style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.green),
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          '${_routeDistance.toStringAsFixed(1)} km • Đi bằng xe máy',
+                          '${mapProvider.remainingDistanceKm.toStringAsFixed(1)} km • Đi bằng xe máy',
                           style: const TextStyle(fontSize: 14, color: Colors.grey),
                         ),
                       ],
@@ -560,28 +708,11 @@ class _RoutingPanelState extends State<RoutingPanel> {
                   Row(
                     children: [
                       FloatingActionButton.small(
-                        heroTag: 'risk_fab_solo',
-                        backgroundColor: Colors.orange[700],
-                        onPressed: () async {
-                          final pos = _myLastPos;
-                          if (pos == null) { _showSnackbar('Chưa lấy được vị trí GPS'); return; }
-                          final roomId = _effectiveRoomId;
-                          if (roomId.isEmpty) return;
-                          final reported = await RiskReportSheet.show(
-                            context,
-                            roomId: roomId,
-                            lat: pos.lat.toDouble(),
-                            lng: pos.lng.toDouble(),
-                          );
-                          if (reported && mounted) _showSnackbar('Đã báo cáo sự cố thành công!');
-                        },
-                        child: const Icon(Icons.warning_amber_rounded, color: Colors.white),
-                      ),
-                      const SizedBox(width: 8),
-                      FloatingActionButton.small(
                         heroTag: 'stop_nav_fab',
                         onPressed: () async {
                           _riskRefreshTimer?.cancel();
+                          // Chụp dữ liệu trước khi clearAll xóa state
+                          final snapshot = _captureNavSnapshot(mapProvider);
                           _stopNavGpsStream();
                           await context.read<MapStateProvider>().clearAll();
                           mapProvider.clearRoutes();
@@ -589,6 +720,8 @@ class _RoutingPanelState extends State<RoutingPanel> {
                             _previewDestPos = null;
                             _polylineData = [];
                           });
+                          // Lưu Firestore sau khi UI đã cập nhật, không block stop
+                          if (snapshot != null) unawaited(_saveTripFromSnapshot(snapshot));
                         },
                         backgroundColor: Colors.redAccent,
                         child: const Icon(Icons.close, color: Colors.white),
@@ -600,9 +733,40 @@ class _RoutingPanelState extends State<RoutingPanel> {
             ),
           ),
 
+        if (mapProvider.isNavigating)
+          Positioned(
+            top: 144 - safePad,
+            right: 16,
+            child: GestureDetector(
+              onTap: () async {
+                final pos = _myLastPos;
+                if (pos == null) { _showSnackbar('Chưa lấy được vị trí GPS'); return; }
+                final roomId = _effectiveRoomId;
+                if (roomId.isEmpty) return;
+                final reported = await RiskReportSheet.show(
+                  context,
+                  roomId: roomId,
+                  lat: pos.lat.toDouble(),
+                  lng: pos.lng.toDouble(),
+                );
+                if (reported && mounted) _showSnackbar('Đã báo cáo sự cố thành công!');
+              },
+              child: Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                  boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 6, offset: Offset(0, 2))],
+                ),
+                child: const Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 22),
+              ),
+            ),
+          ),
+
         if (!mapProvider.isNavigating || !mapProvider.isFollowing)
           Positioned(
-            bottom: 200,
+            top: mapProvider.isNavigating ? 194 - safePad : 144 - safePad,
             right: 16,
             child: GestureDetector(
               onTap: () => context.read<MapStateProvider>().flyToCurrentLocation(),
@@ -623,56 +787,6 @@ class _RoutingPanelState extends State<RoutingPanel> {
             ),
           ),
 
-        if (mapProvider.isNavigating)
-          Positioned(
-            bottom: 128,
-            right: 16,
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                shape: BoxShape.circle,
-                boxShadow: [
-                  BoxShadow(color: Colors.redAccent.withValues(alpha: 0.4), blurRadius: 15, spreadRadius: 2),
-                ],
-              ),
-              child: VoiceRecordButton(
-                  onResult: (spokenText) async {
-                    if (spokenText.isEmpty) return;
-
-                    Position? currentPos;
-                    try {
-                      currentPos = await Geolocator.getCurrentPosition(
-                        desiredAccuracy: LocationAccuracy.high,
-                        timeLimit: const Duration(seconds: 3),
-                      );
-                    } catch (_) {
-                      currentPos = await Geolocator.getLastKnownPosition();
-                    }
-
-                    final roomId = _effectiveRoomId;
-                    final result = await GeminiAiApi.analyzeCommand(
-                      spokenText,
-                      roomId: roomId,
-                      currentLat: currentPos?.latitude,
-                      currentLng: currentPos?.longitude,
-                    );
-
-                    if (result == null) { _showSnackbar('Không kết nối được AI'); return; }
-                    if (!mounted) return;
-
-                    await VoiceActionDispatcher(
-                      context: context,
-                      isInGroup: widget.roomId?.isNotEmpty == true,
-                      roomId: roomId,
-                      currentLat: currentPos?.latitude,
-                      currentLng: currentPos?.longitude,
-                      currentUserId: FirebaseAuth.instance.currentUser?.uid ?? '',
-                      onNavigateTo: _handleDestinationSelected,
-                    ).dispatch(result);
-                  },
-                ),
-              ),
-            ),
       ],
     );
   }

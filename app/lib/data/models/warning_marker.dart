@@ -51,78 +51,102 @@ class WarningMarker {
       progressKm: (json['progressKm'] as num?)?.toDouble() ?? 0.0,
     );
   }
-/// Trả về màu sắc cho Bong bóng đánh dấu trên bản đồ tùy theo loại rủi ro
   Color get color {
     switch (category) {
-      case 'WEATHER':
-        // Xét thêm subtype để đổi màu theo từng loại thời tiết
-        switch (subtype) {
-          case 'sunny': return Colors.orange;     // Nắng -> Cam
-          case 'cloudy': return Colors.blueGrey;  // Nhiều mây -> Xám
-          case 'rain': return Colors.blue;        // Mưa -> Xanh biển
-          case 'storm': return Colors.deepPurple; // Bão -> Tím
-          case 'fog': return Colors.grey;         // Sương mù -> Xám nhạt
-          default: return Colors.lightBlue;
-        }
-      case 'ACCIDENT':
-        return Colors.red;
-      case 'ROAD_BAD':
-        return Colors.orange;
-      case 'POLICE':
-        return Colors.purple;
-      case 'HAZARD_OTHER':
-      default:
-        return Colors.grey;
+      case 'WEATHER': return Colors.blue;
+      case 'ACCIDENT': return Colors.red;
+      case 'ROAD_BAD': return Colors.orange;
+      case 'POLICE': return Colors.indigo;
+      case 'HAZARD_OTHER': return Colors.deepOrange;
+      default: return Colors.grey;
     }
   }
 
-  /// Trả về Emoji hiển thị trên Bong bóng bản đồ
   String get emoji {
     switch (category) {
       case 'WEATHER':
-        // Cập nhật emoji tinh gọn
         switch (subtype) {
-          case 'sunny': return '☀️';
-          case 'cloudy': return '☁️';
-          case 'rain': return '🌧️';
-          case 'storm': return '⛈️';
+          case 'heavy_rain': return '🌧️';
+          case 'flooding': return '🌊';
           case 'fog': return '🌫️';
-          default: return '🌤️';
+          case 'strong_wind': return '💨';
+          default: return '🌩️';
         }
       case 'ACCIDENT':
-        return '⚠️';
+        switch (subtype) {
+          case 'accident': return '💥';
+          case 'traffic_jam': return '🚦';
+          case 'breakdown': return '🔧';
+          default: return '💥';
+        }
       case 'ROAD_BAD':
-        return '🕳️';
+        switch (subtype) {
+          case 'pothole': return '🕳️';
+          case 'slippery': return '💧';
+          case 'construction': return '🚧';
+          case 'gravel': return '🪨';
+          default: return '🕳️';
+        }
       case 'POLICE':
-        return '🚓';
+        switch (subtype) {
+          case 'checkpoint': return '🛑';
+          case 'mobile_patrol': return '🚔';
+          case 'speed_camera': return '📷';
+          default: return '👮';
+        }
       case 'HAZARD_OTHER':
       default:
-        return '🚧';
+        switch (subtype) {
+          case 'landslide': return '⛰️';
+          case 'fallen_tree': return '🌳';
+          case 'animal': return '🦌';
+          case 'dark_road': return '🌑';
+          default: return '🆘';
+        }
     }
   }
 
-  /// Trả về Icon hiển thị trong danh sách UI (Card List)
   IconData get icon {
     switch (category) {
       case 'WEATHER':
-        // Cập nhật Icon của Flutter theo thời tiết
         switch (subtype) {
-          case 'sunny': return Icons.wb_sunny;
-          case 'cloudy': return Icons.cloud;
-          case 'rain': return Icons.water_drop;
-          case 'storm': return Icons.thunderstorm;
+          case 'heavy_rain': return Icons.water;
+          case 'flooding': return Icons.waves;
           case 'fog': return Icons.foggy;
-          default: return Icons.wb_cloudy;
+          case 'strong_wind': return Icons.air;
+          default: return Icons.thunderstorm;
         }
       case 'ACCIDENT':
-        return Icons.warning;
+        switch (subtype) {
+          case 'accident': return Icons.car_crash;
+          case 'traffic_jam': return Icons.traffic;
+          case 'breakdown': return Icons.build;
+          default: return Icons.warning;
+        }
       case 'ROAD_BAD':
-        return Icons.construction;
+        switch (subtype) {
+          case 'pothole': return Icons.report_problem;
+          case 'slippery': return Icons.dangerous;
+          case 'construction': return Icons.engineering;
+          case 'gravel': return Icons.terrain;
+          default: return Icons.construction;
+        }
       case 'POLICE':
-        return Icons.local_police;
+        switch (subtype) {
+          case 'checkpoint': return Icons.local_police;
+          case 'mobile_patrol': return Icons.directions_car;
+          case 'speed_camera': return Icons.speed;
+          default: return Icons.local_police;
+        }
       case 'HAZARD_OTHER':
       default:
-        return Icons.dangerous;
+        switch (subtype) {
+          case 'landslide': return Icons.landscape;
+          case 'fallen_tree': return Icons.park;
+          case 'animal': return Icons.pets;
+          case 'dark_road': return Icons.dark_mode;
+          default: return Icons.dangerous;
+        }
     }
   }
 

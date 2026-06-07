@@ -7,12 +7,13 @@ import 'package:firebase_database/firebase_database.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 
 import 'firebase_options.dart';
-import 'package:route_mate_app/features/main_shell/main_shell_screen.dart';
-import 'package:route_mate_app/core/services/solo_room_service.dart';
-
+import 'core/theme/app_theme.dart';
+import 'features/auth/screens/welcome_screen.dart';
+import 'features/main_shell/main_shell_screen.dart';
 
 /// =========================================================
 /// EMULATOR SWITCH — Connect frontend với backend emulator
@@ -25,7 +26,7 @@ import 'package:route_mate_app/core/services/solo_room_service.dart';
 ///   - Release + emulator (cho demo 2 máy thật):
 ///     $ flutter run --release \
 ///         --dart-define=USE_EMULATOR=true \
-///         --dart-define=MAC_LAN_IP=192.168.1.29
+///         --dart-define=MAC_LAN_IP=192.168.1.36
 ///
 ///   - Production (sau này khi deploy backend):
 ///     $ flutter run --release
@@ -35,7 +36,7 @@ import 'package:route_mate_app/core/services/solo_room_service.dart';
 const bool _useEmulator =
     bool.fromEnvironment('USE_EMULATOR', defaultValue: kDebugMode);
 const String _macLanIp =
-    String.fromEnvironment('MAC_LAN_IP', defaultValue: '192.168.1.29');
+    String.fromEnvironment('MAC_LAN_IP', defaultValue: '192.168.1.36');
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -72,6 +73,7 @@ Future<void> main() async {
       await FirebaseAuth.instance.useAuthEmulator(host, 9099);
       FirebaseDatabase.instance.useDatabaseEmulator(host, 9000);
       FirebaseFirestore.instance.useFirestoreEmulator(host, 8080);
+      await FirebaseStorage.instance.useStorageEmulator(host, 9199);
 
       debugPrint('✓ Connected to Firebase emulators at $host');
       debugPrint('  Mode: ${kDebugMode ? "DEBUG" : "RELEASE"} + emulator');
@@ -99,22 +101,6 @@ Future<void> main() async {
     debugPrint('▶ PRODUCTION mode — không connect emulator');
   }
 
-  // === 4. Anonymous sign-in (FIX: UNAUTHENTICATED khi gọi callable) ===
-  try {
-    if (FirebaseAuth.instance.currentUser == null) {
-      final cred = await FirebaseAuth.instance.signInAnonymously();
-      debugPrint('✓ Signed in as: ${cred.user?.uid}');
-    } else {
-      debugPrint(
-          '✓ Already signed in: ${FirebaseAuth.instance.currentUser?.uid}');
-    }
-  } catch (e) {
-    debugPrint('⚠ Sign-in failed: $e');
-  }
-
-  // === 5. Tạo solo room cho tab Tìm đường ===
-  await SoloRoomService.ensureSoloRoom();
-
   runApp(const MyApp());
 }
 
@@ -126,11 +112,40 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'RouteMate',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
-        useMaterial3: true,
+      theme: AppTheme.theme,
+      home: StreamBuilder<User?>(
+        stream: FirebaseAuth.instance.idTokenChanges(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const _SplashScreen();
+          }
+          if (snapshot.hasData && snapshot.data != null) {
+            return const MainShellScreen();
+          }
+          return const WelcomeScreen();
+        },
       ),
-      home: const MainShellScreen(),
+    );
+  }
+}
+
+class _SplashScreen extends StatelessWidget {
+  const _SplashScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(
+      backgroundColor: Colors.white,
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.motorcycle_rounded, size: 56, color: AppTheme.primary),
+            SizedBox(height: 16),
+            CircularProgressIndicator(color: AppTheme.primary, strokeWidth: 2),
+          ],
+        ),
+      ),
     );
   }
 }

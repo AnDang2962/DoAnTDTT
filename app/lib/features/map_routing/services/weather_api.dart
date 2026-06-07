@@ -1,5 +1,4 @@
 import 'package:cloud_functions/cloud_functions.dart';
-import 'package:flutter/foundation.dart';
 import '../../../core/services/firebase_functions_helper.dart';
 import '../../../data/models/warning_marker.dart';
 
@@ -39,19 +38,15 @@ class WeatherApi {
       final description = data['description']?.toString() ?? '';
 
       // Phân loại subtype theo weather ID (logic gốc giữ nguyên)
-      String subtype = 'clear';
+      String subtype;
       if (rawCode >= 200 && rawCode < 300) {
-        subtype = 'storm';
+        subtype = 'heavy_rain'; // Bão → mưa to
       } else if (rawCode >= 300 && rawCode < 600) {
-        subtype = 'rain';
-      } else if (rawCode >= 600 && rawCode < 700) {
-        subtype = 'snow';
+        subtype = 'heavy_rain';
       } else if (rawCode >= 700 && rawCode < 800) {
         subtype = 'fog';
-      } else if (rawCode == 800) {
-        subtype = 'sunny';
-      } else if (rawCode > 800) {
-        subtype = 'cloudy';
+      } else {
+        subtype = 'fog'; // mặc định fallback
       }
 
       final tempDisplay = '${tempC.toStringAsFixed(1)}°C • 💧 $humidity%';
@@ -70,11 +65,7 @@ class WeatherApi {
         distanceFromRouteKm: 0.0,
         progressKm: progressKm,
       );
-    } on FirebaseFunctionsException catch (e) {
-      debugPrint('[WeatherApi] ✗ Backend error: ${e.code} - ${e.message}');
-      return null;
-    } catch (e) {
-      debugPrint('[WeatherApi] ✗ Lỗi: $e');
+    } catch (_) {
       return null;
     }
   }
