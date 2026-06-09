@@ -100,4 +100,29 @@ class RoomRepository {
   Stream<DocumentSnapshot<Map<String, dynamic>>> listenToRoomData(String roomId) {
     return _firestore.collection('rooms').doc(roomId).snapshots();
   }
+
+  Future<void> updateSweeperAlert(String roomId, Map<String, dynamic>? alert) async {
+    try {
+      await _firestore.collection('rooms').doc(roomId).update({'sweeperAlert': alert});
+    } catch (_) {}
+  }
+
+  Future<void> updateGroupStop(String roomId, Map<String, dynamic>? stop) async {
+    try {
+      await _firestore.collection('rooms').doc(roomId).update({'groupStop': stop});
+    } catch (_) {}
+  }
+
+  Future<void> sendGroupMessage(String roomId, String text, String senderName, String senderUid) async {
+    try {
+      await _firestore.collection('rooms').doc(roomId).update({
+        'groupMessage': {
+          'text': text,
+          'senderName': senderName,
+          'senderUid': senderUid,
+          'ts': DateTime.now().millisecondsSinceEpoch,
+        },
+      });
+    } catch (_) {}
+  }
 }

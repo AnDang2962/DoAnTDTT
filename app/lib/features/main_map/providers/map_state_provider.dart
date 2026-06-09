@@ -68,18 +68,19 @@ class MapStateProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> setNavArrow(mapbox.Position pos) async {
+  Future<void> setNavArrow(mapbox.Position pos, {double? bearing}) async {
     if (_pointManager == null) return;
     _navArrowImage ??= await MarkerBuilder.buildNavigationArrow();
     if (_navArrow != null) {
       _navArrow!.geometry = mapbox.Point(coordinates: pos);
+      if (bearing != null) _navArrow!.iconRotate = bearing;
       try { await _pointManager!.update(_navArrow!); } catch (_) {}
     } else {
       _navArrow = await _pointManager!.create(mapbox.PointAnnotationOptions(
         geometry: mapbox.Point(coordinates: pos),
         image: _navArrowImage,
         iconAnchor: mapbox.IconAnchor.CENTER,
-        iconRotate: 0,
+        iconRotate: bearing ?? 0,
       ));
     }
   }
@@ -221,6 +222,12 @@ class MapStateProvider extends ChangeNotifier {
   Map<String, String> _lastMemberRoles = {};
   Map<String, String> _lastMemberPhotoUrls = {};
   final Map<String, ui.Image> _cachedAvatarImages = {};
+  bool _drawingMembers = false;
+  bool _pendingMemberDraw = false;
+  Map<String, mapbox.Position> _pendingLocations = {};
+  Map<String, String> _pendingRoles = {};
+  Map<String, String> _pendingPhotoUrls = {};
+  String? _pendingSkipUid;
 
   mapbox.PointAnnotation? _navArrow;
   Uint8List? _navArrowImage;
@@ -230,10 +237,16 @@ class MapStateProvider extends ChangeNotifier {
   final List<mapbox.PointAnnotation> _riskMarkers = [];
   final Map<String, WarningMarker> _weatherMarkerData = {};
   final Map<String, WarningMarker> _riskMarkerData = {};
+  final Map<String, String> _memberAnnotationUidMap = {};
   Function(WarningMarker)? _markerTapHandler;
+  Function(String uid)? _memberTapHandler;
 
   void setMarkerTapHandler(Function(WarningMarker)? handler) {
     _markerTapHandler = handler;
+  }
+
+  void setMemberTapHandler(Function(String uid)? handler) {
+    _memberTapHandler = handler;
   }
 
   List<WarningMarker> weatherWarnings = [];
@@ -244,7 +257,9 @@ class MapStateProvider extends ChangeNotifier {
     _pointManager = await mapboxMap.annotations.createPointAnnotationManager();
     _markerTapSub = _pointManager!.tapEvents(onTap: (annotation) {
       final marker = _weatherMarkerData[annotation.id] ?? _riskMarkerData[annotation.id];
-      if (marker != null) _markerTapHandler?.call(marker);
+      if (marker != null) { _markerTapHandler?.call(marker); return; }
+      final uid = _memberAnnotationUidMap[annotation.id];
+      if (uid != null) _memberTapHandler?.call(uid);
     });
     _polylineManager = await mapboxMap.annotations.createPolylineAnnotationManager();
     await _mapboxMap?.location.updateSettings(
@@ -382,12 +397,45 @@ class MapStateProvider extends ChangeNotifier {
     Map<String, String> photoUrls = const {},
   }) async {
     if (_pointManager == null) return;
+    if (_drawingMembers) {
+      _pendingMemberDraw = true;
+      _pendingLocations = Map.from(locations);
+      _pendingRoles = Map.from(roles);
+      _pendingPhotoUrls = Map.from(photoUrls);
+      _pendingSkipUid = skipUid;
+      return;
+    }
+    _drawingMembers = true;
+    try {
+      await _drawMemberMarkersInternal(locations, roles, skipUid: skipUid, photoUrls: photoUrls);
+    } finally {
+      _drawingMembers = false;
+      if (_pendingMemberDraw) {
+        _pendingMemberDraw = false;
+        unawaited(drawMemberMarkers(
+          _pendingLocations, _pendingRoles,
+          skipUid: _pendingSkipUid,
+          photoUrls: _pendingPhotoUrls,
+        ));
+      }
+    }
+  }
+
+  Future<void> _drawMemberMarkersInternal(
+    Map<String, mapbox.Position> locations,
+    Map<String, String> roles, {
+    String? skipUid,
+    Map<String, String> photoUrls = const {},
+  }) async {
+    if (_pointManager == null) return;
 
     final toRemove = _memberMarkerMap.keys
         .where((uid) => !locations.containsKey(uid) || uid == skipUid)
         .toList();
     for (final uid in toRemove) {
-      try { await _pointManager!.delete(_memberMarkerMap[uid]!); } catch (_) {}
+      final ann = _memberMarkerMap[uid];
+      if (ann != null) _memberAnnotationUidMap.remove(ann.id);
+      try { await _pointManager!.delete(ann!); } catch (_) {}
       _memberMarkerMap.remove(uid);
     }
 
@@ -412,6 +460,7 @@ class MapStateProvider extends ChangeNotifier {
         try { await _pointManager!.update(_memberMarkerMap[uid]!); } catch (_) {}
       } else {
         if (_memberMarkerMap.containsKey(uid)) {
+          _memberAnnotationUidMap.remove(_memberMarkerMap[uid]!.id);
           try { await _pointManager!.delete(_memberMarkerMap[uid]!); } catch (_) {}
         }
         final image = await MarkerBuilder.buildMemberBubble(
@@ -419,11 +468,13 @@ class MapStateProvider extends ChangeNotifier {
           roleLabel: BadgeHelper.roleLabel(role),
           avatarImage: _cachedAvatarImages[uid],
         );
-        _memberMarkerMap[uid] = await _pointManager!.create(mapbox.PointAnnotationOptions(
+        final annotation = await _pointManager!.create(mapbox.PointAnnotationOptions(
           geometry: mapbox.Point(coordinates: pos),
           image: image,
           iconAnchor: mapbox.IconAnchor.BOTTOM,
         ));
+        _memberMarkerMap[uid] = annotation;
+        _memberAnnotationUidMap[annotation.id] = uid;
       }
     }
 
@@ -573,6 +624,7 @@ class MapStateProvider extends ChangeNotifier {
       if (!keepMemberMarkers) {
         await _pointManager!.deleteAll();
         _memberMarkerMap.clear();
+        _memberAnnotationUidMap.clear();
         _lastMemberRoles.clear();
         _lastMemberPhotoUrls.clear();
         _cachedAvatarImages.clear();

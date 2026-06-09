@@ -28,6 +28,7 @@ class VoiceActionDispatcher {
   final Map<String, dynamic> memberInfo;
   final String currentUserId;
   final OnNavigateTo? onNavigateTo;
+  final Future<void> Function(String message)? onGroupBroadcast;
   final bool isTooFar;
   final List<Map<String, dynamic>> gapDetails;
   final List<Map<String, dynamic>> offRouteWarnings;
@@ -45,6 +46,7 @@ class VoiceActionDispatcher {
     this.memberInfo = const {},
     this.currentUserId = '',
     this.onNavigateTo,
+    this.onGroupBroadcast,
     this.isTooFar = false,
     this.gapDetails = const [],
     this.offRouteWarnings = const [],
@@ -90,6 +92,17 @@ class VoiceActionDispatcher {
             modalTitle: _nearbyTitle(params['place_type']?.toString()),
             responseText: responseText,
           );
+          break;
+        case 'group_broadcast':
+          final message = params['message']?.toString() ?? '';
+          if (message.isEmpty) break;
+          if (onGroupBroadcast == null) {
+            _showSnackbar('Tính năng thông báo chỉ dành cho Leader và Chốt đoàn');
+            break;
+          }
+          await onGroupBroadcast!(message);
+          _showSnackbar('📢 Đã gửi: $message');
+          await _tts.speak(message.replaceAll(RegExp(r'[^\p{L}\p{N}\s,.!?]', unicode: true), '').trim());
           break;
         default:
           if (responseText.isNotEmpty) _showSnackbar(responseText);

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:firebase_database/firebase_database.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -16,6 +17,7 @@ import '../../../data/repositories/warning_repository.dart';
 import '../../main_map/providers/map_state_provider.dart';
 import '../../map_routing/widgets/routing_search_bar.dart';
 import '../../map_routing/widgets/marker_detail_sheet.dart';
+import '../widgets/member_detail_sheet.dart';
 import '../../map_routing/services/weather_api.dart';
 import '../../map_routing/widgets/risk_report_sheet.dart';
 import '../../../core/utils/route_utils.dart';
@@ -78,8 +80,17 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
   List<Map<String, dynamic>> _offRouteWarnings = [];
   DateTime? _lastGapCheck;
 
+  String? _sweeperAlertType;
+  String? _incomingSweeperAlertType;
+
+  bool _groupStopActive = false;
+  String _groupStopLabel = 'Leader';
+
+  int _lastGroupMsgTs = 0;
+  List<String> _customMessages = [];
+
   bool _isLoading = false;
-  bool _navigationStarting = false;
+
   bool _panelOpen = false;
   DateTime? _navStartTime;
   static const double _panelWidth = 256.0;
@@ -99,11 +110,13 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
       _mapProvider!.setGroupMode(true);
       _mapProvider!.setMapTapHandler(_onMapTap);
       _mapProvider!.setMarkerTapHandler((m) { if (mounted) MarkerDetailSheet.show(context, m); });
+      _mapProvider!.setMemberTapHandler((uid) { if (mounted) _showMemberDetail(uid); });
       _voiceProv = context.read<VoiceCommandProvider>();
       _voiceProv!.addListener(_onVoiceCommand);
     });
     _startMyGpsTracker();
     _listenToFirebaseStreams();
+    _loadCustomMessages();
   }
 
   void _startMyGpsTracker() {
@@ -128,7 +141,8 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
           mapProvider.easeTo(_myLastPos!, bearing: pos.heading >= 0 ? pos.heading : null);
         }
         if (mapProvider.isNavigating) {
-          unawaited(mapProvider.setNavArrow(_myLastPos!));
+          final heading = pos.heading >= 0 ? pos.heading : null;
+          unawaited(mapProvider.setNavArrow(_myLastPos!, bearing: heading));
           _checkNearbyRisks();
           if (!_arrivedNotified && mapProvider.remainingDistanceKm < 0.3) {
             _arrivedNotified = true;
@@ -207,6 +221,61 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
         _memberInfo = newMemberInfo;
       });
 
+      final sweeperAlert = data['sweeperAlert'] as Map<String, dynamic>?;
+      final alertType = sweeperAlert?['type']?.toString();
+      final alertMsg = sweeperAlert?['message']?.toString();
+      if (alertMsg != null && alertType != _incomingSweeperAlertType && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(alertMsg),
+          duration: const Duration(seconds: 5),
+        ));
+      }
+      _incomingSweeperAlertType = alertType;
+
+      final groupStop = data['groupStop'] as Map<String, dynamic>?;
+      final stopActive = groupStop?['active'] == true;
+      final stopLabel = groupStop?['triggerLabel']?.toString() ?? 'Leader';
+      if (stopActive != _groupStopActive && mounted) {
+        if (stopActive) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('$stopLabel yêu cầu dừng đoàn'),
+            duration: const Duration(seconds: 6),
+          ));
+          unawaited(TtsService().speak('$stopLabel yêu cầu dừng đoàn'));
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Đoàn tiếp tục di chuyển'),
+            duration: Duration(seconds: 3),
+          ));
+          unawaited(TtsService().speak('Đoàn tiếp tục di chuyển'));
+        }
+      }
+      if (mounted) {
+        setState(() {
+          _groupStopActive = stopActive;
+          _groupStopLabel = stopLabel;
+        });
+      }
+
+      final groupMsg = data['groupMessage'] as Map<String, dynamic>?;
+      if (groupMsg != null) {
+        final ts = (groupMsg['ts'] as num?)?.toInt() ?? 0;
+        final text = groupMsg['text']?.toString() ?? '';
+        final sender = groupMsg['senderName']?.toString() ?? '';
+        final senderUid = groupMsg['senderUid']?.toString() ?? '';
+        final isSelf = senderUid == widget.currentUser.id;
+        if (ts != _lastGroupMsgTs && text.isNotEmpty && mounted) {
+          _lastGroupMsgTs = ts;
+          if (!isSelf) {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text('$sender: $text'),
+              duration: const Duration(seconds: 5),
+            ));
+            unawaited(TtsService().speak(text.replaceAll(RegExp(r'[^\p{L}\p{N}\s,.!?]', unicode: true), '').trim()));
+          }
+        }
+      }
+
       final routeData = data['route'] as Map<String, dynamic>?;
       if (routeData != null && routeData['polyline'] != null) {
         final polyList = routeData['polyline'] as List;
@@ -226,8 +295,7 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
           final wasNavigating = _loadedRouteKey != null && (context.read<MapStateProvider>().isNavigating);
           _loadedRouteKey = routeKey;
           final mapProvider = context.read<MapStateProvider>();
-          _navigationStarting = true;
-          await mapProvider.removeMemberMarker(widget.currentUser.id);
+
           mapProvider.setFullRoute(coords);
           mapProvider.setRouteStatsFromCoords(coords);
           await mapProvider.drawRoutePolyline(coords);
@@ -235,7 +303,7 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
           _navStartTime ??= DateTime.now();
           if (_myLastPos != null) unawaited(mapProvider.setNavArrow(_myLastPos!));
           _updateMapMembers();
-          _navigationStarting = false;
+
           final endName = routeData['endName']?.toString() ?? 'Đích đến';
           if (coords.isNotEmpty) {
             _destPos = coords.last;
@@ -367,7 +435,7 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
     mapProvider.drawMemberMarkers(
       _memberLocations,
       roles,
-      skipUid: (mapProvider.isNavigating || _navigationStarting) ? widget.currentUser.id : null,
+      skipUid: widget.currentUser.id,
       photoUrls: photoUrls,
     );
   }
@@ -429,12 +497,155 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
         ));
       }
       _prevIsTooFar = newIsTooFar;
+
+      // Sweeper alert — chỉ thiết bị sweeper ghi Firestore
+      final naturalSweeperId = (data['sweeper'] as Map<Object?, Object?>?)?['id']?.toString();
+      String? designatedSweeperUid;
+      String? leaderUid;
+      _memberInfo.forEach((uid, info) {
+        final role = (info as Map?)?['role']?.toString();
+        if (role == 'sweeper') designatedSweeperUid = uid;
+        if (role == 'leader') leaderUid = uid;
+      });
+
+      if (designatedSweeperUid != null && widget.currentUser.id == designatedSweeperUid) {
+        String? newType;
+        String? newMsg;
+
+        if (naturalSweeperId != null && naturalSweeperId != designatedSweeperUid) {
+          newType = 'member_behind';
+          newMsg = '⚠️ ${_memberName(naturalSweeperId)} đang đi sau chốt đoàn';
+        } else if (leaderUid != null) {
+          final leaderGap = gaps.where((g) => g['memberId'] == leaderUid).firstOrNull;
+          if (leaderGap != null) {
+            final distKm = (leaderGap['distanceKm'] as num?)?.toDouble() ?? 0;
+            newType = 'sweeper_gap';
+            newMsg = '⚠️ Chốt đoàn cách leader ${distKm.toStringAsFixed(1)} km — đoàn đứt';
+          }
+        }
+
+        if (newType != _sweeperAlertType) {
+          _sweeperAlertType = newType;
+          _roomRepo.updateSweeperAlert(
+            widget.roomId,
+            newType != null ? {'type': newType, 'message': newMsg} : null,
+          );
+        }
+      }
     } catch (_) {}
   }
 
   void _showSnackbar(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), duration: const Duration(seconds: 2)));
+  }
+
+  Future<void> _showMemberDetail(String uid) async {
+    final info = _memberInfo[uid] as Map?;
+    if (info == null) return;
+    final name = info['displayName']?.toString() ?? 'Thành viên';
+    final role = info['role']?.toString() ?? 'member';
+    final memberPos = _memberLocations[uid];
+    double? distanceKm;
+    if (memberPos != null && _myLastPos != null) {
+      distanceKm = Geolocator.distanceBetween(
+        _myLastPos!.lat.toDouble(), _myLastPos!.lng.toDouble(),
+        memberPos.lat.toDouble(), memberPos.lng.toDouble(),
+      ) / 1000;
+    }
+
+    String photoUrl = info['photoURL']?.toString() ?? '';
+    String email = '';
+    String phoneNumber = '';
+    double? totalKm;
+    try {
+      final snap = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+      if (snap.exists) {
+        final data = snap.data()!;
+        photoUrl = data['avatarUrl']?.toString() ?? photoUrl;
+        email = data['email']?.toString() ?? '';
+        phoneNumber = data['phoneNumber']?.toString() ?? '';
+        totalKm = (data['totalKm'] as num?)?.toDouble();
+      }
+    } catch (_) {}
+
+    if (!mounted) return;
+    MemberDetailSheet.show(
+      context,
+      name: name,
+      role: role,
+      photoUrl: photoUrl,
+      email: email,
+      phoneNumber: phoneNumber,
+      distanceKm: distanceKm,
+      totalKm: totalKm,
+    );
+  }
+
+  Future<void> _toggleGroupStop() async {
+    final myInfo = _memberInfo[widget.currentUser.id] as Map?;
+    final myName = myInfo?['displayName']?.toString() ?? widget.currentUser.name;
+    if (_groupStopActive) {
+      await _roomRepo.updateGroupStop(widget.roomId, null);
+    } else {
+      final triggerLabel = widget.currentUser.role == UserRole.sweeper ? 'Chốt đoàn' : 'Leader';
+      await _roomRepo.updateGroupStop(widget.roomId, {
+        'active': true,
+        'triggerName': myName,
+        'triggerLabel': triggerLabel,
+        'lat': _myLastPos?.lat ?? 0,
+        'lng': _myLastPos?.lng ?? 0,
+      });
+    }
+  }
+
+  static const List<String> _presetMessages = [
+    '🏎 Đi nhanh lên',
+    '🐢 Đi chậm lại',
+    '⛽ Dừng tại trạm xăng',
+    '🍜 Dừng ăn uống',
+    '⚠️ Chú ý đường xấu phía trước',
+    '↰ Rẽ trái phía trước',
+    '↱ Rẽ phải phía trước',
+    '✅ Đi đúng hướng',
+  ];
+
+  Future<void> _loadCustomMessages() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getStringList('group_custom_messages_${widget.currentUser.id}') ?? [];
+    if (mounted) setState(() => _customMessages = saved);
+  }
+
+  Future<void> _saveCustomMessages() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList('group_custom_messages_${widget.currentUser.id}', _customMessages);
+  }
+
+  Future<void> _sendGroupMessage(String text) async {
+    final myInfo = _memberInfo[widget.currentUser.id] as Map?;
+    final myName = myInfo?['displayName']?.toString() ?? widget.currentUser.name;
+    await _roomRepo.sendGroupMessage(widget.roomId, text, myName, widget.currentUser.id);
+  }
+
+  void _showQuickMessageSheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => _QuickMessageSheet(
+        presets: _presetMessages,
+        customs: List.from(_customMessages),
+        onSend: (text) {
+          Navigator.pop(ctx);
+          _sendGroupMessage(text);
+          unawaited(TtsService().speak(text.replaceAll(RegExp(r'[^\p{L}\p{N}\s,.!?]', unicode: true), '').trim()));
+        },
+        onCustomsChanged: (updated) {
+          setState(() => _customMessages = updated);
+          _saveCustomMessages();
+        },
+      ),
+    );
   }
 
   void _handleDestinationSelected(mapbox.Position destPos, String placeName) async {
@@ -565,6 +776,10 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
       onNavigateTo: widget.currentUser.role == UserRole.leader
           ? (pos, name) async => _handleDestinationSelected(pos, name)
           : null,
+      onGroupBroadcast: (widget.currentUser.role == UserRole.leader ||
+              widget.currentUser.role == UserRole.sweeper)
+          ? (msg) => _sendGroupMessage(msg)
+          : null,
       isTooFar: _isTooFar,
       gapDetails: _gapDetails,
       offRouteWarnings: _offRouteWarnings,
@@ -612,10 +827,6 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
   Future<void> _startGroupNavigation(MapStateProvider mapProvider) async {
     if (mapProvider.availableRoutes.isEmpty) return;
 
-    // Xoá marker của chính mình trước mọi thứ — tránh overlap với nav arrow
-    _navigationStarting = true;
-    await mapProvider.removeMemberMarker(widget.currentUser.id);
-
     final chosenRoute = mapProvider.availableRoutes[mapProvider.selectedRouteIndex];
     final geometry = chosenRoute['geometry']['coordinates'] as List;
     final routeCoords = geometry
@@ -653,7 +864,7 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
     _navStartTime ??= DateTime.now();
     if (_myLastPos != null) unawaited(mapProvider.setNavArrow(_myLastPos!));
     _updateMapMembers();
-    _navigationStarting = false;
+
     mapProvider.flyToCurrentLocation();
     if (_myLastPos == null) {
       final fallback = await Geolocator.getLastKnownPosition();
@@ -700,6 +911,7 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
     _voiceProv?.removeListener(_onVoiceCommand);
     _mapProvider?.setMapTapHandler(null);
     _mapProvider?.setMarkerTapHandler(null);
+    _mapProvider?.setMemberTapHandler(null);
     _gpsSub?.cancel();
     _roomDataSub?.cancel();
     _memberLocationsSub?.cancel();
@@ -796,6 +1008,8 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
                 final mapProvider = context.read<MapStateProvider>();
                 await mapProvider.clearAll(keepMemberMarkers: true);
                 mapProvider.clearRoutes();
+                _sweeperAlertType = null;
+                _roomRepo.updateSweeperAlert(widget.roomId, null);
                 setState(() {
                   _lastDestPos = null;
                   _lastDestName = null;
@@ -1192,6 +1406,83 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
               ),
             ),
 
+          if (widget.currentUser.role == UserRole.leader ||
+              widget.currentUser.role == UserRole.sweeper)
+            Positioned(
+              top: 144.0 +
+                  (mapProvider.isNavigating ? 50.0 : 0.0) +
+                  ((!mapProvider.isNavigating || !mapProvider.isFollowing) ? 50.0 : 0.0) +
+                  50.0,
+              right: 16,
+              child: GestureDetector(
+                onTap: _showQuickMessageSheet,
+                child: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                    boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 6, offset: Offset(0, 2))],
+                  ),
+                  child: const Icon(Icons.campaign, color: Colors.blue, size: 20),
+                ),
+              ),
+            ),
+
+          if (widget.currentUser.role == UserRole.leader ||
+              widget.currentUser.role == UserRole.sweeper)
+            Positioned(
+              top: 144.0 +
+                  (mapProvider.isNavigating ? 50.0 : 0.0) +
+                  ((!mapProvider.isNavigating || !mapProvider.isFollowing) ? 50.0 : 0.0),
+              right: 16,
+              child: GestureDetector(
+                onTap: _toggleGroupStop,
+                child: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: _groupStopActive ? Colors.red : Colors.white,
+                    shape: BoxShape.circle,
+                    boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 6, offset: Offset(0, 2))],
+                  ),
+                  child: Icon(
+                    Icons.stop_circle_outlined,
+                    color: _groupStopActive ? Colors.white : Colors.red,
+                    size: 20,
+                  ),
+                ),
+              ),
+            ),
+
+          if (_groupStopActive)
+            Positioned(
+              top: 92,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.red.shade700,
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.stop_circle_outlined, color: Colors.white, size: 16),
+                      const SizedBox(width: 6),
+                      Text(
+                        '$_groupStopLabel yêu cầu dừng đoàn',
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+
           if (mapProvider.isNavigating)
             Positioned(
               top: 144,
@@ -1233,6 +1524,140 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
                 ),
               ),
             ),
+        ],
+      ),
+    );
+  }
+}
+
+class _QuickMessageSheet extends StatefulWidget {
+  final List<String> presets;
+  final List<String> customs;
+  final ValueChanged<String> onSend;
+  final ValueChanged<List<String>> onCustomsChanged;
+
+  const _QuickMessageSheet({
+    required this.presets,
+    required this.customs,
+    required this.onSend,
+    required this.onCustomsChanged,
+  });
+
+  @override
+  State<_QuickMessageSheet> createState() => _QuickMessageSheetState();
+}
+
+class _QuickMessageSheetState extends State<_QuickMessageSheet> {
+  late List<String> _customs;
+  final _controller = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _customs = List.from(widget.customs);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _addCustom() {
+    final text = _controller.text.trim();
+    if (text.isEmpty) return;
+    setState(() => _customs.add(text));
+    _controller.clear();
+    widget.onCustomsChanged(_customs);
+  }
+
+  void _removeCustom(int index) {
+    setState(() => _customs.removeAt(index));
+    widget.onCustomsChanged(_customs);
+  }
+
+  Widget _msgTile(String text, {VoidCallback? onDelete}) {
+    return ListTile(
+      dense: true,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
+      title: Text(text, style: const TextStyle(fontSize: 14)),
+      trailing: onDelete != null
+          ? IconButton(
+              icon: const Icon(Icons.delete_outline, size: 18, color: Colors.red),
+              onPressed: onDelete,
+            )
+          : null,
+      onTap: () => widget.onSend(text),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      initialChildSize: 0.55,
+      minChildSize: 0.4,
+      maxChildSize: 0.85,
+      expand: false,
+      builder: (_, scrollCtrl) => Column(
+        children: [
+          const SizedBox(height: 12),
+          Center(
+            child: Container(
+              width: 40, height: 4,
+              decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2)),
+            ),
+          ),
+          const SizedBox(height: 12),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text('Gửi tin nhắn đến đoàn', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            ),
+          ),
+          const Divider(height: 16),
+          Expanded(
+            child: ListView(
+              controller: scrollCtrl,
+              children: [
+                ...widget.presets.map((t) => _msgTile(t)),
+                if (_customs.isNotEmpty) ...[
+                  const Divider(height: 8, indent: 16, endIndent: 16),
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(16, 4, 16, 0),
+                    child: Text('Câu của bạn', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                  ),
+                  ...List.generate(_customs.length, (i) => _msgTile(_customs[i], onDelete: () => _removeCustom(i))),
+                ],
+                const Divider(height: 16, indent: 16, endIndent: 16),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _controller,
+                          decoration: InputDecoration(
+                            hintText: 'Thêm câu mới...',
+                            isDense: true,
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(20)),
+                          ),
+                          onSubmitted: (_) => _addCustom(),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton(
+                        onPressed: _addCustom,
+                        icon: const Icon(Icons.add_circle, color: Colors.blue, size: 28),
+                        padding: EdgeInsets.zero,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );

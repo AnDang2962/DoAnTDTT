@@ -131,6 +131,21 @@ const VOICE_ACTION_DECLARATIONS: FunctionDeclaration[] = [
     },
   },
   {
+    name: 'group_broadcast',
+    description:
+      'Gửi thông báo tùy chỉnh đến toàn bộ thành viên trong đoàn. Chỉ dùng khi user nói bắt đầu bằng "thông báo" theo sau là nội dung cần gửi.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        message: {
+          type: Type.STRING,
+          description: 'Nội dung thông báo cần gửi, trích xuất từ phần sau "thông báo"',
+        },
+      },
+      required: ['message'],
+    },
+  },
+  {
     name: 'unknown',
     description:
       'Khi không hiểu rõ ý user hoặc câu nói không liên quan đến các action trên.',
