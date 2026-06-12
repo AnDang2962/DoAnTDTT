@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -11,7 +12,9 @@ import 'package:route_mate_app/features/profile/screens/profile_screen.dart';
 import 'package:route_mate_app/features/group_radar/presentation/providers/members_provider.dart';
 import 'package:route_mate_app/core/services/solo_room_service.dart';
 import 'package:route_mate_app/core/services/voice_service.dart';
+import 'package:route_mate_app/core/services/wake_word_service.dart';
 import 'package:route_mate_app/core/providers/voice_command_provider.dart';
+import 'widgets/voice_fab.dart';
 
 import 'package:firebase_messaging/firebase_messaging.dart';
 import '../sos_emergency/widgets/sos_map_overlay.dart' show SOSMapOverlay;
@@ -26,12 +29,17 @@ class MainShellScreen extends StatefulWidget {
 class _MainShellScreenState extends State<MainShellScreen> {
   int _currentIndex = 0;
   final VoiceService _voiceService = VoiceService();
+  final WakeWordService _wakeWord = WakeWordService();
   bool _isVoiceListening = false;
+  BuildContext? _shellCtx; // Builder ctx — below MultiProvider, can read providers
 
   @override
   void initState() {
     super.initState();
     _voiceService.initialize();
+    _wakeWord.addListener(_onWakeWordStateChanged);
+    _wakeWord.onWakeWordDetected = _onWakeWordDetected;
+    _wakeWord.init();
     SoloRoomService.ensureSoloRoom();
     FirebaseMessaging.instance.requestPermission();
     FirebaseMessaging.onMessage.listen(_handleFcmMessage);
@@ -39,14 +47,70 @@ class _MainShellScreenState extends State<MainShellScreen> {
 
   @override
   void dispose() {
+    _wakeWord.removeListener(_onWakeWordStateChanged);
+    _wakeWord.onWakeWordDetected = null;
     _voiceService.stopListening();
     super.dispose();
+  }
+
+  void _onWakeWordStateChanged() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _onWakeWordDetected() async {
+    if (!mounted || _isVoiceListening) return;
+    await _wakeWord.pauseForCommand();
+    if (mounted) _startVoiceCommand();
+  }
+
+  Future<void> _startVoiceCommand() async {
+    if (_isVoiceListening) return;
+    setState(() => _isVoiceListening = true);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Đang nghe... Hãy nói lệnh của bạn'),
+        duration: Duration(seconds: 3),
+      ),
+    );
+    await Future.delayed(const Duration(milliseconds: 800));
+    if (!mounted || !_isVoiceListening) return;
+    _voiceService.startListening(
+      onResult: (text) {
+        if (!mounted) return;
+        setState(() => _isVoiceListening = false);
+        unawaited(_wakeWord.resumeAfterCommand());
+        final ctx = _shellCtx;
+        if (ctx != null) _dispatchVoiceResult(ctx, text);
+      },
+      onDone: () {
+        if (!mounted || !_isVoiceListening) return;
+        setState(() => _isVoiceListening = false);
+        if (_wakeWord.mode == VoiceMode.wakeWord) {
+          unawaited(_wakeWord.resumeAfterCommand());
+        }
+      },
+    ).catchError((_) {
+      if (!mounted) return;
+      setState(() => _isVoiceListening = false);
+      if (_wakeWord.mode == VoiceMode.wakeWord) {
+        unawaited(_wakeWord.resumeAfterCommand());
+      }
+    });
   }
 
   void _toggleVoice(BuildContext ctx) async {
     if (_isVoiceListening) {
       await _voiceService.stopListening();
       if (mounted) setState(() => _isVoiceListening = false);
+      if (_wakeWord.mode == VoiceMode.wakeWord) {
+        unawaited(_wakeWord.resumeAfterCommand());
+      }
+      return;
+    }
+
+    if (_wakeWord.mode == VoiceMode.wakeWord) {
+      await _wakeWord.pauseForCommand();
+      if (mounted) _startVoiceCommand();
       return;
     }
 
@@ -58,33 +122,46 @@ class _MainShellScreenState extends State<MainShellScreen> {
       ),
     );
     await _voiceService.startListening(
-      onPartialResult: (_) {},
       onResult: (text) {
         if (!mounted) return;
         setState(() => _isVoiceListening = false);
-
-        if (_currentIndex > 1) {
-          ScaffoldMessenger.of(ctx).showSnackBar(
-            const SnackBar(
-              content: Text('Voice command không khả dụng ở tab này'),
-              backgroundColor: Colors.orange,
-            ),
-          );
-          return;
-        }
-
-        if (_currentIndex == 1 && !ctx.read<MapStateProvider>().isGroupModeActive) {
-          ScaffoldMessenger.of(ctx).showSnackBar(
-            const SnackBar(
-              content: Text('Bạn chưa vào phòng nhóm, không thể thực hiện lệnh này'),
-              backgroundColor: Colors.orange,
-            ),
-          );
-          return;
-        }
-
-        ctx.read<VoiceCommandProvider>().dispatch(text);
+        _dispatchVoiceResult(ctx, text);
       },
+      onDone: () {
+        if (!mounted || !_isVoiceListening) return;
+        setState(() => _isVoiceListening = false);
+      },
+    );
+  }
+
+  void _dispatchVoiceResult(BuildContext ctx, String text) {
+    if (_currentIndex > 1) {
+      ScaffoldMessenger.of(ctx).showSnackBar(
+        const SnackBar(
+          content: Text('Voice command không khả dụng ở tab này'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+    if (_currentIndex == 1 && !ctx.read<MapStateProvider>().isGroupModeActive) {
+      ScaffoldMessenger.of(ctx).showSnackBar(
+        const SnackBar(
+          content: Text('Bạn chưa vào phòng nhóm, không thể thực hiện lệnh này'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+    ctx.read<VoiceCommandProvider>().dispatch(text);
+  }
+
+  void _showModeToast(VoiceMode mode) {
+    final msg = mode == VoiceMode.wakeWord
+        ? 'Chế độ Wake Word — nói "routemate" để kích hoạt'
+        : 'Chế độ Nhấn mic';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), duration: const Duration(seconds: 3)),
     );
   }
 
@@ -157,6 +234,7 @@ class _MainShellScreenState extends State<MainShellScreen> {
         ChangeNotifierProvider(create: (_) => VoiceCommandProvider()),
       ],
       child: Builder(builder: (ctx) {
+        _shellCtx = ctx;
         final screens = [
           SafeArea(child: RoutingPanel(isActive: _currentIndex == 0)),
           const RoomLobbyScreen(),
@@ -182,18 +260,19 @@ class _MainShellScreenState extends State<MainShellScreen> {
               ),
             ],
           ),
-          floatingActionButton: FloatingActionButton(
-            backgroundColor: _isVoiceListening
-                ? AppTheme.red.withValues(alpha: 0.75)
-                : AppTheme.red,
-            foregroundColor: Colors.white,
-            shape: const CircleBorder(),
-            elevation: 4,
-            onPressed: () => _toggleVoice(ctx),
-            child: Icon(
-              _isVoiceListening ? Icons.mic : Icons.mic_none,
-              size: 30,
-            ),
+          floatingActionButton: VoiceFab(
+            isListening: _isVoiceListening,
+            mode: _wakeWord.mode,
+            wakeState: _wakeWord.state,
+            onTap: () => _toggleVoice(ctx),
+            onSwitchToWake: () async {
+              await _wakeWord.setMode(VoiceMode.wakeWord);
+              if (mounted) _showModeToast(VoiceMode.wakeWord);
+            },
+            onSwitchToTap: () async {
+              await _wakeWord.setMode(VoiceMode.tap);
+              if (mounted) _showModeToast(VoiceMode.tap);
+            },
           ),
           floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
           bottomNavigationBar: _BottomNav(

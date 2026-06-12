@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../../core/services/voice_service.dart';
+import '../../../core/services/wake_word_service.dart';
 
 class VoiceRecordButton extends StatefulWidget {
   final Function(String text) onResult;
@@ -12,6 +14,7 @@ class VoiceRecordButton extends StatefulWidget {
 
 class _VoiceRecordButtonState extends State<VoiceRecordButton> {
   final VoiceService _voiceService = VoiceService();
+  final WakeWordService _wakeWord = WakeWordService();
   bool _isListening = false;
   String _currentText = '';
 
@@ -23,19 +26,27 @@ class _VoiceRecordButtonState extends State<VoiceRecordButton> {
 
   @override
   void dispose() {
-    _voiceService.stopListening();
+    if (_isListening) {
+      final wasInWakeMode = _wakeWord.mode == VoiceMode.wakeWord;
+      unawaited(_voiceService.stopListening().then((_) {
+        if (wasInWakeMode) unawaited(_wakeWord.resumeAfterCommand());
+      }));
+    }
     super.dispose();
   }
 
   void _listen() async {
     if (!_isListening) {
+      final wasInWakeMode = _wakeWord.mode == VoiceMode.wakeWord;
+      if (wasInWakeMode) await _wakeWord.pauseForCommand();
+      if (!mounted) return;
       setState(() {
         _isListening = true;
         _currentText = '';
       });
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Đang nghe... Hãy nói lệnh của bạn'),
+          content: Text('Đang nghe... Hãy nói địa điểm'),
           duration: Duration(seconds: 2),
         ),
       );
@@ -45,12 +56,20 @@ class _VoiceRecordButtonState extends State<VoiceRecordButton> {
         },
         onResult: (text) {
           if (mounted) setState(() => _isListening = false);
+          if (wasInWakeMode) unawaited(_wakeWord.resumeAfterCommand());
           widget.onResult(text);
+        },
+        onDone: () {
+          if (mounted) setState(() => _isListening = false);
+          if (wasInWakeMode) unawaited(_wakeWord.resumeAfterCommand());
         },
       );
     } else {
       await _voiceService.stopListening();
       if (mounted) setState(() => _isListening = false);
+      if (_wakeWord.mode == VoiceMode.wakeWord) {
+        unawaited(_wakeWord.resumeAfterCommand());
+      }
     }
   }
 

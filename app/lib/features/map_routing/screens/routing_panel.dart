@@ -121,6 +121,10 @@ class _RoutingPanelState extends State<RoutingPanel> {
       if (!mounted) return;
       _realtimeRisks = risks;
       _redrawAllRisks();
+      if (context.read<MapStateProvider>().isNavigating) {
+        _lastRiskCheckMs = 0;
+        _checkNearbyRisks();
+      }
     });
   }
 
@@ -176,6 +180,7 @@ class _RoutingPanelState extends State<RoutingPanel> {
     _lastRiskCheckMs = now;
 
     final allRisks = {..._realtimeRisks.map((r) => r), ..._crossGroupRisks}.toList();
+    final announcements = <String>[];
     for (final risk in allRisks) {
       if (_announcedRiskIds.contains(risk.id)) continue;
       final dist = Geolocator.distanceBetween(
@@ -186,8 +191,11 @@ class _RoutingPanelState extends State<RoutingPanel> {
         _announcedRiskIds.add(risk.id);
         final distText = dist < 100 ? 'ngay phía trước' : 'phía trước ${dist.round()} mét';
         final note = risk.note.isNotEmpty ? ', ${risk.note}' : '';
-        unawaited(TtsService().speak('$distText có ${risk.vi}$note'));
+        announcements.add('$distText có ${risk.vi}$note');
       }
+    }
+    if (announcements.isNotEmpty) {
+      unawaited(TtsService().speak(announcements.join('. ')));
     }
   }
 

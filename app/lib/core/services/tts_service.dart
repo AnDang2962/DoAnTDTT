@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'wake_word_service.dart';
 
 class TtsService {
   static final TtsService _instance = TtsService._internal();
@@ -16,8 +18,6 @@ class TtsService {
     await _tts.setVolume(1.0);
     await _tts.setPitch(1.0);
     if (Platform.isIOS) {
-      // Giữ audio session active (playback + duckOthers) để TTS không bị
-      // queue chờ STT "đánh thức" — fix lỗi TTS chỉ phát sau khi dùng mic.
       await _tts.setSharedInstance(true);
       await _tts.setIosAudioCategory(
         IosTextToSpeechAudioCategory.playback,
@@ -34,7 +34,13 @@ class TtsService {
   Future<void> speak(String text) async {
     try {
       await _init();
+      final wakeWord = WakeWordService();
+      final wasListening = wakeWord.state == WakeWordState.listening;
+      if (wasListening) await wakeWord.pauseForCommand();
       await _tts.stop();
+      _tts.setCompletionHandler(() {
+        if (wasListening) unawaited(wakeWord.resumeAfterCommand());
+      });
       await _tts.speak(text);
     } catch (_) {}
   }

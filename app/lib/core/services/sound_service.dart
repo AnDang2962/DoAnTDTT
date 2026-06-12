@@ -10,6 +10,15 @@ class SoundService {
   Future<void> playMemberJoin() => _play('assets/sounds/member_join.mp3');
   Future<void> playMemberLeave() => _play('assets/sounds/member_leave.mp3');
 
+  Future<void> playWakeWord() async {
+    try {
+      await _player.stop();
+      final done = _player.onPlayerComplete.first;
+      await _player.play(AssetSource('sounds/wakeword.mp3'));
+      await done;
+    } catch (_) {}
+  }
+
   Future<void> _play(String asset) async {
     try {
       await _player.stop();

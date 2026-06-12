@@ -117,6 +117,12 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
     _startMyGpsTracker();
     _listenToFirebaseStreams();
     _loadCustomMessages();
+    Future.delayed(const Duration(milliseconds: 400), () {
+      if (mounted) setState(() => _panelOpen = true);
+    });
+    Future.delayed(const Duration(milliseconds: 3400), () {
+      if (mounted) setState(() => _panelOpen = false);
+    });
   }
 
   void _startMyGpsTracker() {
@@ -167,6 +173,7 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
     final allRisks = [..._realtimeRisks, ..._crossGroupRisks]
         .where((r) => seen.add(r.id))
         .toList();
+    final announcements = <String>[];
     for (final risk in allRisks) {
       if (_announcedRiskIds.contains(risk.id)) continue;
       final dist = Geolocator.distanceBetween(
@@ -177,8 +184,11 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
         _announcedRiskIds.add(risk.id);
         final distText = dist < 100 ? 'ngay phía trước' : 'phía trước ${dist.round()} mét';
         final note = risk.note.isNotEmpty ? ', ${risk.note}' : '';
-        unawaited(TtsService().speak('$distText có ${risk.vi}$note'));
+        announcements.add('$distText có ${risk.vi}$note');
       }
+    }
+    if (announcements.isNotEmpty) {
+      unawaited(TtsService().speak(announcements.join('. ')));
     }
   }
 

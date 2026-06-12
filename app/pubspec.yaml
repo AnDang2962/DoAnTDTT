@@ -52,6 +52,9 @@ dependencies:
   firebase_storage: ^12.3.7     # Upload ảnh avatar lên Firebase Storage
   audioplayers: ^6.1.0          # Phát âm thanh chuông thành viên vào/ra nhóm
 
+dependency_overrides:
+  http: ^1.6.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
