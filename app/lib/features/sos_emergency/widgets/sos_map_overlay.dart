@@ -29,7 +29,6 @@ class _SOSMapOverlayState extends State<SOSMapOverlay>
   void initState() {
     super.initState();
     
-    // 🔥 ĐÃ SỬA LỖI TRẮNG MAP: Gọi đúng tên biến MAPBOX_PUBLIC_KEY khớp với file main.dart của bạn
     final String mapboxToken = dotenv.env['MAPBOX_PUBLIC_KEY'] ?? '';
     MapboxOptions.setAccessToken(mapboxToken);
 
@@ -89,7 +88,6 @@ class _SOSMapOverlayState extends State<SOSMapOverlay>
     final double lat = widget.latitude;
     final double lng = widget.longitude;
     
-    // Link Directions API chính thức của Google Maps
     final Uri googleMapsUrl = Uri.parse(
       'https://www.google.com/maps/dir/?api=1&destination=$lat,$lng'
     );
@@ -118,10 +116,7 @@ class _SOSMapOverlayState extends State<SOSMapOverlay>
         children: [
           // LỚP DƯỚI: Bản đồ Mapbox
           MapWidget(
-            // 🔥 THÊM DÒNG NÀY: Ép Mapbox phải vẽ bản đồ đường phố (MAPBOX_STREETS) để tránh lỗi nền xám
-            styleUri: MapboxStyles.MAPBOX_STREETS, 
-            
-            // Giữ nguyên cú pháp camera gốc của bạn, không thay đổi
+            styleUri: MapboxStyles.MAPBOX_STREETS,
             viewport: CameraViewportState(
               center: Point(coordinates: Position(widget.longitude, widget.latitude)),
               zoom: 16.5,
@@ -150,7 +145,7 @@ class _SOSMapOverlayState extends State<SOSMapOverlay>
                 backgroundColor: Colors.red.shade700,
                 padding: const EdgeInsets.symmetric(vertical: 16),
                 elevation: 10,
-                shadowColor: Colors.red.withOpacity(0.5),
+                shadowColor: Colors.red.withValues(alpha: 0.5),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(30),
                 ),

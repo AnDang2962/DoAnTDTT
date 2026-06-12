@@ -1,32 +1,38 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mapbox;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:geolocator/geolocator.dart'; // Thêm dòng này để đo khoảng cách
+import 'package:geolocator/geolocator.dart';
 
-/// Tiện ích hỗ trợ tìm đường và xử lý lộ trình.
+class RouteWaypoint {
+  final mapbox.Position pos;
+  final String name;
+  const RouteWaypoint({required this.pos, required this.name});
+}
+
 class RouteUtils {
-  /// Hàm gọi API Mapbox Directions để tìm đường đi từ điểm A đến điểm B.
-  /// Lộ trình trả về là một danh sách các tọa độ (đường gấp khúc - polyline) để vẽ lên bản đồ.
-  /// Hàm MỚI: Gọi API Mapbox lấy NHIỀU tuyến đường để người dùng lựa chọn
-  static Future<List<dynamic>> getMultipleMapboxRoutes(mapbox.Position start, mapbox.Position destination) async {
+  static Future<List<dynamic>> getMultipleMapboxRoutes(
+    mapbox.Position start,
+    mapbox.Position destination, {
+    List<mapbox.Position> viaWaypoints = const [],
+  }) async {
     final token = dotenv.env['MAPBOX_PUBLIC_KEY'] ?? '';
-    
-    // ĐÃ THÊM: alternatives=true (để lấy đường phụ) và overview=full (để nét vẽ mượt hơn)
-    final url = 'https://api.mapbox.com/directions/v5/mapbox/driving/${start.lng},${start.lat};${destination.lng},${destination.lat}?geometries=geojson&alternatives=true&overview=full&access_token=$token';
+    final allStops = [start, ...viaWaypoints, destination]
+        .map((p) => '${p.lng},${p.lat}')
+        .join(';');
+    final url = 'https://api.mapbox.com/directions/v5/mapbox/driving/$allStops?geometries=geojson&alternatives=true&overview=full&access_token=$token';
 
     try {
       final response = await http.get(Uri.parse(url));
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        // Nếu API trả về danh sách lộ trình hợp lệ
         if (data['routes'] != null && data['routes'].isNotEmpty) {
-          // Trả về NGUYÊN BẢN toàn bộ mảng routes (chứa cả distance, duration và geometry)
           return data['routes'];
         }
       }
     } catch (e) {
-      print("Lỗi API Mapbox lấy nhiều lộ trình: $e");
+      debugPrint("Lỗi API Mapbox lấy nhiều lộ trình: $e");
     }
     return [];
   }

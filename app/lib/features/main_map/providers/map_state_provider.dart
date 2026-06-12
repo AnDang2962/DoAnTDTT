@@ -18,7 +18,16 @@ class MapStateProvider extends ChangeNotifier {
   mapbox.PointAnnotationManager? _pointManager;
   mapbox.PolylineAnnotationManager? _polylineManager;
   mapbox.Cancelable? _markerTapSub;
+  mapbox.Cancelable? _polylineTapSub;
   StreamSubscription<CompassEvent>? _compassSub;
+
+  Function(int routeIndex)? _routeTapHandler;
+  final Map<String, int> _routeAnnotationIndexMap = {};
+  int _lastPolylineTapMs = 0;
+
+  void setRouteTapHandler(Function(int routeIndex)? handler) {
+    _routeTapHandler = handler;
+  }
 
   bool get isMapReady => _mapboxMap != null && _pointManager != null && _polylineManager != null;
 
@@ -35,6 +44,8 @@ class MapStateProvider extends ChangeNotifier {
   }
 
   void notifyMapTap(mapbox.Position pos) {
+    // Bỏ qua map tap ngay sau khi polyline được tap để tránh chọn điểm đến nhầm
+    if (DateTime.now().millisecondsSinceEpoch - _lastPolylineTapMs < 300) return;
     _mapTapHandler?.call(pos);
   }
 
@@ -235,6 +246,7 @@ class MapStateProvider extends ChangeNotifier {
   final List<mapbox.PointAnnotation> _destMarkers = [];
   final List<mapbox.PointAnnotation> _weatherMarkers = [];
   final List<mapbox.PointAnnotation> _riskMarkers = [];
+  final List<mapbox.PointAnnotation> _waypointMarkers = [];
   final Map<String, WarningMarker> _weatherMarkerData = {};
   final Map<String, WarningMarker> _riskMarkerData = {};
   final Map<String, String> _memberAnnotationUidMap = {};
@@ -262,6 +274,12 @@ class MapStateProvider extends ChangeNotifier {
       if (uid != null) _memberTapHandler?.call(uid);
     });
     _polylineManager = await mapboxMap.annotations.createPolylineAnnotationManager();
+    _polylineTapSub?.cancel();
+    _polylineTapSub = _polylineManager!.tapEvents(onTap: (annotation) {
+      _lastPolylineTapMs = DateTime.now().millisecondsSinceEpoch;
+      final idx = _routeAnnotationIndexMap[annotation.id];
+      if (idx != null) _routeTapHandler?.call(idx);
+    });
     await _mapboxMap?.location.updateSettings(
       mapbox.LocationComponentSettings(enabled: true, pulsingEnabled: true),
     );
@@ -487,22 +505,43 @@ class MapStateProvider extends ChangeNotifier {
   Future<void> drawMultipleRoutesPreview() async {
     if (_polylineManager == null || availableRoutes.isEmpty) return;
     await _polylineManager!.deleteAll();
+    _routeAnnotationIndexMap.clear();
 
+    // Vẽ tuyến thay thế trước (dưới), tuyến được chọn vẽ sau (trên)
     for (int i = 0; i < availableRoutes.length; i++) {
-      final geometry = availableRoutes[i]['geometry']['coordinates'] as List;
-      final points = geometry
+      if (i == selectedRouteIndex) continue;
+      final points = (availableRoutes[i]['geometry']['coordinates'] as List)
           .map((c) => mapbox.Position(c[0].toDouble(), c[1].toDouble()))
           .toList();
-      final isSelected = (i == selectedRouteIndex);
-      await _polylineManager!.create(
-        mapbox.PolylineAnnotationOptions(
-          geometry: mapbox.LineString(coordinates: points),
-          lineColor: isSelected ? Colors.blue.toARGB32() : Colors.grey.toARGB32(),
-          lineWidth: isSelected ? 6.0 : 4.0,
-          lineOpacity: isSelected ? 1.0 : 0.5,
-        ),
-      );
+      // Đường hiển thị — mảnh, xám
+      final visual = await _polylineManager!.create(mapbox.PolylineAnnotationOptions(
+        geometry: mapbox.LineString(coordinates: points),
+        lineColor: const Color(0xFFAAAAAA).toARGB32(),
+        lineWidth: 5.0,
+        lineOpacity: 0.85,
+      ));
+      _routeAnnotationIndexMap[visual.id] = i;
+      // Hit-zone vô hình — rộng để dễ tap
+      final hitZone = await _polylineManager!.create(mapbox.PolylineAnnotationOptions(
+        geometry: mapbox.LineString(coordinates: points),
+        lineColor: const Color(0xFFAAAAAA).toARGB32(),
+        lineWidth: 10.0,
+        lineOpacity: 0.01,
+      ));
+      _routeAnnotationIndexMap[hitZone.id] = i;
     }
+
+    // Vẽ tuyến được chọn lên trên cùng
+    final selPoints = (availableRoutes[selectedRouteIndex]['geometry']['coordinates'] as List)
+        .map((c) => mapbox.Position(c[0].toDouble(), c[1].toDouble()))
+        .toList();
+    final selected = await _polylineManager!.create(mapbox.PolylineAnnotationOptions(
+      geometry: mapbox.LineString(coordinates: selPoints),
+      lineColor: const Color(0xFF1A73E8).toARGB32(),
+      lineWidth: 7.0,
+      lineOpacity: 1.0,
+    ));
+    _routeAnnotationIndexMap[selected.id] = selectedRouteIndex;
   }
 
   Future<void> drawWeatherMarkers(List<WarningMarker> weatherList) async {
@@ -540,6 +579,23 @@ class MapStateProvider extends ChangeNotifier {
       _weatherMarkers.add(annotation);
       _weatherMarkerData[annotation.id] = w;
       occupiedPositions.add(adjustedPos);
+    }
+  }
+
+  Future<void> drawWaypointMarkers(List<mapbox.Position> positions) async {
+    if (_pointManager == null) return;
+    for (final m in _waypointMarkers) {
+      try { await _pointManager!.delete(m); } catch (_) {}
+    }
+    _waypointMarkers.clear();
+    for (int i = 0; i < positions.length; i++) {
+      final image = await MarkerBuilder.buildWaypointPin(i + 1);
+      final annotation = await _pointManager!.create(mapbox.PointAnnotationOptions(
+        geometry: mapbox.Point(coordinates: positions[i]),
+        image: image,
+        iconAnchor: mapbox.IconAnchor.BOTTOM,
+      ));
+      _waypointMarkers.add(annotation);
     }
   }
 
@@ -605,6 +661,7 @@ class MapStateProvider extends ChangeNotifier {
   void dispose() {
     _compassSub?.cancel();
     _markerTapSub?.cancel();
+    _polylineTapSub?.cancel();
     super.dispose();
   }
 
@@ -633,10 +690,12 @@ class MapStateProvider extends ChangeNotifier {
         for (final m in _destMarkers) { try { await _pointManager!.delete(m); } catch (_) {} }
         for (final m in _weatherMarkers) { try { await _pointManager!.delete(m); } catch (_) {} }
         for (final m in _riskMarkers) { try { await _pointManager!.delete(m); } catch (_) {} }
+        for (final m in _waypointMarkers) { try { await _pointManager!.delete(m); } catch (_) {} }
       }
       _destMarkers.clear();
       _weatherMarkers.clear();
       _riskMarkers.clear();
+      _waypointMarkers.clear();
       _weatherMarkerData.clear();
       _riskMarkerData.clear();
       _destinationPosition = null;
@@ -655,6 +714,7 @@ class MapStateProvider extends ChangeNotifier {
   void clearRoutesData() {
     availableRoutes = [];
     selectedRouteIndex = 0;
+    _routeAnnotationIndexMap.clear();
     notifyListeners();
   }
 }

@@ -21,6 +21,7 @@ import '../widgets/member_detail_sheet.dart';
 import '../../map_routing/services/weather_api.dart';
 import '../../map_routing/widgets/risk_report_sheet.dart';
 import '../../../core/utils/route_utils.dart';
+import '../../map_routing/widgets/waypoint_search_sheet.dart';
 import '../../../core/services/tts_service.dart';
 import '../../../core/services/sound_service.dart';
 import '../../../core/providers/voice_command_provider.dart';
@@ -91,6 +92,9 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
 
   bool _isLoading = false;
 
+  List<RouteWaypoint> _waypoints = [];
+  bool _addingWaypointByMap = false;
+
   bool _panelOpen = false;
   DateTime? _navStartTime;
   static const double _panelWidth = 256.0;
@@ -111,6 +115,9 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
       _mapProvider!.setMapTapHandler(_onMapTap);
       _mapProvider!.setMarkerTapHandler((m) { if (mounted) MarkerDetailSheet.show(context, m); });
       _mapProvider!.setMemberTapHandler((uid) { if (mounted) _showMemberDetail(uid); });
+      if (widget.currentUser.role == UserRole.leader) {
+        _mapProvider!.setRouteTapHandler(_onRouteTap);
+      }
       _voiceProv = context.read<VoiceCommandProvider>();
       _voiceProv!.addListener(_onVoiceCommand);
     });
@@ -669,15 +676,122 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
     await mapProvider.clearAll(keepMemberMarkers: true);
     mapProvider.clearRoutes();
     await mapProvider.drawDestinationMarker(destPos, placeName);
-    setState(() { _lastDestPos = destPos; _lastDestName = placeName; _polylineData = []; });
+    setState(() {
+      _lastDestPos = destPos;
+      _lastDestName = placeName;
+      _polylineData = [];
+      _waypoints = [];
+      _addingWaypointByMap = false;
+    });
     _destPos = destPos;
+  }
+
+  void _showWaypointSearchSheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => WaypointSearchSheet(
+        onSelected: (pos, name) {
+          Navigator.pop(context);
+          unawaited(_addWaypoint(pos, name));
+        },
+      ),
+    );
+  }
+
+  Future<void> _addWaypoint(mapbox.Position pos, String name) async {
+    final mapProvider = context.read<MapStateProvider>();
+    final wasNavigating = mapProvider.isNavigating;
+    setState(() => _waypoints.add(RouteWaypoint(pos: pos, name: name)));
+
+    if (wasNavigating) {
+      await _recalculateAndRestartGroupNav();
+    } else {
+      if (mapProvider.availableRoutes.isNotEmpty || _polylineData.isNotEmpty) {
+        final destName = mapProvider.previewDestName ?? 'Điểm đến';
+        await mapProvider.clearAll(keepMemberMarkers: true);
+        mapProvider.clearRoutes();
+        setState(() => _polylineData = []);
+        if (_lastDestPos != null) {
+          await mapProvider.drawDestinationMarker(_lastDestPos!, destName, flyToMarker: false);
+        }
+      }
+      await mapProvider.drawWaypointMarkers(_waypoints.map((w) => w.pos).toList());
+      _showSnackbar('Đã thêm: $name');
+    }
+  }
+
+  Future<void> _removeWaypoint(int index) async {
+    final mapProvider = context.read<MapStateProvider>();
+    final wasNavigating = mapProvider.isNavigating;
+    setState(() => _waypoints.removeAt(index));
+
+    if (wasNavigating) {
+      await _recalculateAndRestartGroupNav();
+    } else {
+      if (mapProvider.availableRoutes.isNotEmpty || _polylineData.isNotEmpty) {
+        final destName = mapProvider.previewDestName ?? 'Điểm đến';
+        await mapProvider.clearAll(keepMemberMarkers: true);
+        mapProvider.clearRoutes();
+        setState(() => _polylineData = []);
+        if (_lastDestPos != null) {
+          await mapProvider.drawDestinationMarker(_lastDestPos!, destName, flyToMarker: false);
+        }
+      }
+      await mapProvider.drawWaypointMarkers(_waypoints.map((w) => w.pos).toList());
+    }
+  }
+
+  void _moveWaypoint(int fromIndex, int toIndex) {
+    setState(() {
+      final item = _waypoints.removeAt(fromIndex);
+      _waypoints.insert(toIndex, item);
+    });
+    final mapProvider = context.read<MapStateProvider>();
+    if (mapProvider.availableRoutes.isNotEmpty) mapProvider.clearRoutesData();
+    unawaited(mapProvider.drawWaypointMarkers(_waypoints.map((w) => w.pos).toList()));
+  }
+
+  void _onRouteTap(int routeIndex) async {
+    if (!mounted) return;
+    final mapProvider = context.read<MapStateProvider>();
+    if (routeIndex == mapProvider.selectedRouteIndex) return;
+    mapProvider.selectRoute(routeIndex);
+    await mapProvider.drawMultipleRoutesPreview();
+    await _loadRouteDetails(mapProvider.availableRoutes, routeIndex);
+  }
+
+  Future<void> _recalculateAndRestartGroupNav() async {
+    if (_lastDestPos == null || _myLastPos == null) return;
+    final mapProvider = context.read<MapStateProvider>();
+    final destName = _lastDestName ?? 'Điểm đến';
+
+    _arrivedNotified = false;
+    _announcedRiskIds.clear();
+    _lastRiskCheckMs = 0;
+
+    await mapProvider.clearAll(keepMemberMarkers: true);
+    mapProvider.clearRoutes();
+    setState(() => _polylineData = []);
+
+    await mapProvider.drawDestinationMarker(_lastDestPos!, destName, flyToMarker: false);
+    await mapProvider.drawWaypointMarkers(_waypoints.map((w) => w.pos).toList());
+
+    await _getDirections();
+    if (!mounted || mapProvider.availableRoutes.isEmpty) return;
+    await _startGroupNavigation(mapProvider);
   }
 
   Future<void> _getDirections() async {
     if (_lastDestPos == null || _myLastPos == null) return;
     setState(() => _isLoading = true);
     try {
-      final routes = await RouteUtils.getMultipleMapboxRoutes(_myLastPos!, _lastDestPos!);
+      final routes = await RouteUtils.getMultipleMapboxRoutes(
+        _myLastPos!,
+        _lastDestPos!,
+        viaWaypoints: _waypoints.map((w) => w.pos).toList(),
+      );
       if (!mounted) return;
       if (routes.isEmpty) { _showSnackbar('Không tìm thấy đường đi tới điểm này!'); return; }
       final mapProvider = context.read<MapStateProvider>();
@@ -751,13 +865,21 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
 
   void _onMapTap(mapbox.Position pos) async {
     if (!mounted) return;
-    final mapProvider = context.read<MapStateProvider>();
-    if (mapProvider.isNavigating || _isLoading) return;
     if (widget.currentUser.role != UserRole.leader) return;
-    final name = await GeocodingApi.reverseGeocode(
-      pos.lat.toDouble(),
-      pos.lng.toDouble(),
-    );
+    final mapProvider = context.read<MapStateProvider>();
+    if (_isLoading) return;
+
+    if (_addingWaypointByMap) {
+      setState(() => _addingWaypointByMap = false);
+      final name = await GeocodingApi.reverseGeocode(pos.lat.toDouble(), pos.lng.toDouble());
+      if (!mounted) return;
+      unawaited(_addWaypoint(pos, name));
+      return;
+    }
+
+    if (mapProvider.isNavigating) return;
+    if (mapProvider.availableRoutes.isNotEmpty) return;
+    final name = await GeocodingApi.reverseGeocode(pos.lat.toDouble(), pos.lng.toDouble());
     if (!mounted) return;
     _handleDestinationSelected(pos, name);
   }
@@ -785,6 +907,9 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
       currentUserId: widget.currentUser.id,
       onNavigateTo: widget.currentUser.role == UserRole.leader
           ? (pos, name) async => _handleDestinationSelected(pos, name)
+          : null,
+      onAddWaypoint: widget.currentUser.role == UserRole.leader
+          ? (pos, name) => unawaited(_addWaypoint(pos, name))
           : null,
       onGroupBroadcast: (widget.currentUser.role == UserRole.leader ||
               widget.currentUser.role == UserRole.sweeper)
@@ -891,6 +1016,44 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
     return uid.substring(0, 6);
   }
 
+  Widget _buildGroupRouteInfo(MapStateProvider mapProvider) {
+    final routes = mapProvider.availableRoutes;
+    final selected = routes[mapProvider.selectedRouteIndex];
+    final selKm = (selected['distance'] / 1000).toStringAsFixed(1);
+    final selMins = (selected['duration'] / 60).round();
+    final timeText = selMins > 60
+        ? '${selMins ~/ 60} giờ ${selMins % 60} phút'
+        : '$selMins phút';
+
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        const Icon(Icons.straighten, size: 16, color: Colors.blueAccent),
+        const SizedBox(width: 4),
+        Text('$selKm km', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.blueAccent)),
+        const SizedBox(width: 16),
+        const Icon(Icons.schedule, size: 16, color: Colors.blueAccent),
+        const SizedBox(width: 4),
+        Text(timeText, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.blueAccent)),
+        if (routes.length > 1) ...[
+          const SizedBox(width: 12),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            decoration: BoxDecoration(
+              color: Colors.blue[50],
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.blue[200]!),
+            ),
+            child: Text(
+              'T.${mapProvider.selectedRouteIndex + 1}/${routes.length}',
+              style: TextStyle(fontSize: 12, color: Colors.blue[700], fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
   Widget _buildGapWarningText() {
     final lines = <String>['CẢNH BÁO ĐỨT ĐỘI HÌNH!'];
     for (final g in _gapDetails) {
@@ -922,6 +1085,7 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
     _mapProvider?.setMapTapHandler(null);
     _mapProvider?.setMarkerTapHandler(null);
     _mapProvider?.setMemberTapHandler(null);
+    _mapProvider?.setRouteTapHandler(null);
     _gpsSub?.cancel();
     _roomDataSub?.cancel();
     _memberLocationsSub?.cancel();
@@ -1007,28 +1171,58 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
     return SafeArea(
       child: Stack(
         children: [
-          Positioned(
-            top: 16,
-            left: 16,
-            right: 16,
-            child: RoutingSearchBar(
-              onDestinationSelected: _handleDestinationSelected,
-              destinationName: _lastDestPos != null ? _lastDestName : null,
-              onClear: () async {
-                final mapProvider = context.read<MapStateProvider>();
-                await mapProvider.clearAll(keepMemberMarkers: true);
-                mapProvider.clearRoutes();
-                _sweeperAlertType = null;
-                _roomRepo.updateSweeperAlert(widget.roomId, null);
-                setState(() {
-                  _lastDestPos = null;
-                  _lastDestName = null;
-                  _polylineData = [];
-                  _crossGroupRisks = [];
-                });
-              },
+          if (_addingWaypointByMap && widget.currentUser.role == UserRole.leader)
+            Positioned(
+              top: 16, left: 16, right: 16,
+              child: Material(
+                color: Colors.blue,
+                borderRadius: BorderRadius.circular(25),
+                elevation: 4,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.touch_app, color: Colors.white, size: 18),
+                      const SizedBox(width: 10),
+                      const Expanded(
+                        child: Text(
+                          'Nhấn bản đồ để chọn điểm dừng',
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      GestureDetector(
+                        onTap: () => setState(() => _addingWaypointByMap = false),
+                        child: const Icon(Icons.close, color: Colors.white),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            )
+          else if (!mapProvider.isNavigating && widget.currentUser.role == UserRole.leader)
+            Positioned(
+              top: 16,
+              left: 16,
+              right: 16,
+              child: RoutingSearchBar(
+                onDestinationSelected: _handleDestinationSelected,
+                destinationName: _lastDestPos != null ? _lastDestName : null,
+                onClear: () async {
+                  await mapProvider.clearAll(keepMemberMarkers: true);
+                  mapProvider.clearRoutes();
+                  _sweeperAlertType = null;
+                  _roomRepo.updateSweeperAlert(widget.roomId, null);
+                  setState(() {
+                    _lastDestPos = null;
+                    _lastDestName = null;
+                    _polylineData = [];
+                    _crossGroupRisks = [];
+                    _waypoints = [];
+                    _addingWaypointByMap = false;
+                  });
+                },
+              ),
             ),
-          ),
 
           AnimatedPositioned(
             duration: const Duration(milliseconds: 260),
@@ -1250,7 +1444,50 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 16),
+                  if (_waypoints.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    ListView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      itemCount: _waypoints.length,
+                      itemBuilder: (_, i) => _GroupWaypointTile(
+                        key: ValueKey(i),
+                        index: i,
+                        name: _waypoints[i].name,
+                        onDelete: () => unawaited(_removeWaypoint(i)),
+                        onMoveUp: i > 0 ? () => _moveWaypoint(i, i - 1) : null,
+                        onMoveDown: i < _waypoints.length - 1 ? () => _moveWaypoint(i, i + 1) : null,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: _showWaypointSearchSheet,
+                          icon: const Icon(Icons.add_location_alt, size: 15),
+                          label: const Text('Thêm điểm dừng', style: TextStyle(fontSize: 12)),
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            side: const BorderSide(color: Colors.blue),
+                            foregroundColor: Colors.blue,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      OutlinedButton(
+                        onPressed: () => setState(() => _addingWaypointByMap = true),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                          side: const BorderSide(color: Colors.blue),
+                          foregroundColor: Colors.blue,
+                        ),
+                        child: const Icon(Icons.touch_app, size: 16),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
                   Row(
                     children: [
                       Expanded(
@@ -1288,36 +1525,42 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
               ),
             ),
 
-          if (mapProvider.availableRoutes.isNotEmpty && !mapProvider.isNavigating &&
+          if (mapProvider.availableRoutes.isNotEmpty && !_isLoading && !mapProvider.isNavigating &&
               widget.currentUser.role == UserRole.leader)
             _GroupBottomCard(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      children: List.generate(
-                        mapProvider.availableRoutes.length,
-                        (index) => Padding(
-                          padding: const EdgeInsets.only(right: 8.0),
-                          child: ChoiceChip(
-                            label: Text('Tuyến ${index + 1}',
-                                style: const TextStyle(fontWeight: FontWeight.bold)),
-                            selected: mapProvider.selectedRouteIndex == index,
-                            selectedColor: Colors.blue.withValues(alpha: 0.3),
-                            onSelected: (selected) async {
-                              if (!selected || index == mapProvider.selectedRouteIndex) return;
-                              mapProvider.selectRoute(index);
-                              await mapProvider.drawMultipleRoutesPreview();
-                              await _loadRouteDetails(mapProvider.availableRoutes, index);
-                            },
-                          ),
-                        ),
+                  _buildGroupRouteInfo(mapProvider),
+                  if (_waypoints.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    ListView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      itemCount: _waypoints.length,
+                      itemBuilder: (_, i) => _GroupWaypointTile(
+                        key: ValueKey(i),
+                        index: i,
+                        name: _waypoints[i].name,
+                        onDelete: () => unawaited(_removeWaypoint(i)),
+                        onMoveUp: i > 0 ? () => _moveWaypoint(i, i - 1) : null,
+                        onMoveDown: i < _waypoints.length - 1 ? () => _moveWaypoint(i, i + 1) : null,
                       ),
                     ),
+                  ],
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    onPressed: _showWaypointSearchSheet,
+                    icon: const Icon(Icons.add_location_alt, size: 15),
+                    label: const Text('Thêm điểm dừng', style: TextStyle(fontSize: 12)),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      side: const BorderSide(color: Colors.blue),
+                      foregroundColor: Colors.blue,
+                      minimumSize: const Size(double.infinity, 0),
+                    ),
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 8),
                   ElevatedButton.icon(
                     onPressed: () => _startGroupNavigation(mapProvider),
                     icon: const Icon(Icons.two_wheeler, color: Colors.white),
@@ -1403,13 +1646,57 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
                                 : '${mapProvider.remainingDurationMins} phút',
                             style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.green),
                           ),
-                          const SizedBox(height: 4),
+                          const SizedBox(height: 2),
                           Text(
                             '${mapProvider.remainingDistanceKm.toStringAsFixed(1)} km • Đi bằng xe máy',
                             style: const TextStyle(fontSize: 14, color: Colors.grey),
                           ),
+                          if (_waypoints.isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 2),
+                              child: Text(
+                                '${_waypoints.length} điểm dừng trên đường',
+                                style: const TextStyle(fontSize: 12, color: Colors.blue, fontWeight: FontWeight.w500),
+                              ),
+                            ),
                         ],
                       ),
+                    ),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (widget.currentUser.role == UserRole.leader) ...[
+                          FloatingActionButton.small(
+                            heroTag: 'grp_add_wp_nav_fab',
+                            onPressed: _showWaypointSearchSheet,
+                            backgroundColor: Colors.blue,
+                            child: const Icon(Icons.add_location_alt, color: Colors.white, size: 18),
+                          ),
+                          const SizedBox(width: 6),
+                        ],
+                        FloatingActionButton.small(
+                          heroTag: 'grp_stop_nav_fab',
+                          onPressed: () async {
+                            _riskRefreshTimer?.cancel();
+                            await context.read<MapStateProvider>().clearAll(keepMemberMarkers: true);
+                            mapProvider.clearRoutes();
+                            _arrivedNotified = false;
+                            _arrivedMemberUids.clear();
+                            _announcedRiskIds.clear();
+                            _lastRiskCheckMs = 0;
+                            setState(() {
+                              _lastDestPos = null;
+                              _destPos = null;
+                              _polylineData = [];
+                              _waypoints = [];
+                              _addingWaypointByMap = false;
+                              _loadedRouteKey = null;
+                            });
+                          },
+                          backgroundColor: Colors.redAccent,
+                          child: const Icon(Icons.close, color: Colors.white),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -1667,6 +1954,57 @@ class _QuickMessageSheetState extends State<_QuickMessageSheet> {
                 ),
               ],
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _GroupWaypointTile extends StatelessWidget {
+  final int index;
+  final String name;
+  final VoidCallback onDelete;
+  final VoidCallback? onMoveUp;
+  final VoidCallback? onMoveDown;
+
+  const _GroupWaypointTile({
+    super.key,
+    required this.index,
+    required this.name,
+    required this.onDelete,
+    this.onMoveUp,
+    this.onMoveDown,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      key: key,
+      dense: true,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+      leading: Container(
+        width: 24, height: 24,
+        decoration: const BoxDecoration(color: Color(0xFF1A73E8), shape: BoxShape.circle),
+        alignment: Alignment.center,
+        child: Text('${index + 1}', style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
+      ),
+      title: Text(name, style: const TextStyle(fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          GestureDetector(
+            onTap: onMoveUp,
+            child: Icon(Icons.keyboard_arrow_up, size: 20, color: onMoveUp != null ? Colors.blue : Colors.grey[300]),
+          ),
+          GestureDetector(
+            onTap: onMoveDown,
+            child: Icon(Icons.keyboard_arrow_down, size: 20, color: onMoveDown != null ? Colors.blue : Colors.grey[300]),
+          ),
+          const SizedBox(width: 4),
+          GestureDetector(
+            onTap: onDelete,
+            child: const Icon(Icons.close, size: 16, color: Colors.red),
           ),
         ],
       ),

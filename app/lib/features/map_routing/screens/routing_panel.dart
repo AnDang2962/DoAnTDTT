@@ -18,6 +18,7 @@ import '../../../data/repositories/warning_repository.dart';
 import '../widgets/routing_search_bar.dart';
 import '../widgets/risk_report_sheet.dart';
 import '../widgets/marker_detail_sheet.dart';
+import '../widgets/waypoint_search_sheet.dart';
 import '../services/gemini_ai_api.dart';
 import '../services/geocoding_api.dart';
 import '../../voice/services/voice_action_dispatcher.dart';
@@ -52,6 +53,9 @@ class _RoutingPanelState extends State<RoutingPanel> {
   int _lastRiskCheckMs = 0;
   bool _arrivedNotified = false;
 
+  List<RouteWaypoint> _waypoints = [];
+  bool _addingWaypointByMap = false;
+
   void _redrawAllRisks() {
     if (!mounted) return;
     final mapProvider = context.read<MapStateProvider>();
@@ -78,6 +82,7 @@ class _RoutingPanelState extends State<RoutingPanel> {
       if (widget.isActive) {
         _mapProvider!.setMapTapHandler(_onMapTap);
         _mapProvider!.setMarkerTapHandler(_onMarkerTap);
+        _mapProvider!.setRouteTapHandler(_onRouteTap);
       }
     });
   }
@@ -88,6 +93,7 @@ class _RoutingPanelState extends State<RoutingPanel> {
     if (widget.isActive != oldWidget.isActive) {
       _mapProvider?.setMapTapHandler(widget.isActive ? _onMapTap : null);
       _mapProvider?.setMarkerTapHandler(widget.isActive ? _onMarkerTap : null);
+      _mapProvider?.setRouteTapHandler(widget.isActive ? _onRouteTap : null);
     }
     if (!widget.isActive && oldWidget.isActive) {
       _stopNavGpsStream();
@@ -101,6 +107,8 @@ class _RoutingPanelState extends State<RoutingPanel> {
           mapProvider.clearRoutes();
           setState(() {
             _previewDestPos = null;
+            _waypoints = [];
+            _addingWaypointByMap = false;
           });
         }
       }
@@ -257,6 +265,7 @@ class _RoutingPanelState extends State<RoutingPanel> {
     _voiceProv?.removeListener(_onVoiceCommand);
     _mapProvider?.setMapTapHandler(null);
     _mapProvider?.setMarkerTapHandler(null);
+    _mapProvider?.setRouteTapHandler(null);
     _riskSub?.cancel();
     _riskRefreshTimer?.cancel();
     _navGpsSub?.cancel();
@@ -266,13 +275,37 @@ class _RoutingPanelState extends State<RoutingPanel> {
   void _onMapTap(mapbox.Position pos) async {
     if (!mounted) return;
     final mapProvider = context.read<MapStateProvider>();
-    if (mapProvider.isNavigating || mapProvider.isGroupModeActive || _isLoading) return;
-    final name = await GeocodingApi.reverseGeocode(
-      pos.lat.toDouble(),
-      pos.lng.toDouble(),
-    );
+    if (mapProvider.isGroupModeActive || _isLoading) return;
+
+    if (_addingWaypointByMap) {
+      setState(() => _addingWaypointByMap = false);
+      final name = await GeocodingApi.reverseGeocode(pos.lat.toDouble(), pos.lng.toDouble());
+      if (!mounted) return;
+      unawaited(_addWaypoint(pos, name));
+      return;
+    }
+
+    if (mapProvider.isNavigating) return;
+    if (mapProvider.availableRoutes.isNotEmpty) return;
+    final name = await GeocodingApi.reverseGeocode(pos.lat.toDouble(), pos.lng.toDouble());
     if (!mounted) return;
     await _handleDestinationSelected(pos, name);
+  }
+
+  void _onRouteTap(int routeIndex) async {
+    if (!mounted) return;
+    final mapProvider = context.read<MapStateProvider>();
+    if (routeIndex == mapProvider.selectedRouteIndex) return;
+    mapProvider.selectRoute(routeIndex);
+    await mapProvider.drawMultipleRoutesPreview();
+    Position? cur;
+    try { cur = await Geolocator.getCurrentPosition(timeLimit: const Duration(seconds: 3)); }
+    catch (_) { cur = await Geolocator.getLastKnownPosition(); }
+    await _loadRouteDetails(
+      mapProvider.availableRoutes,
+      routeIndex,
+      mapbox.Position(cur?.longitude ?? 109.1967, cur?.latitude ?? 12.2388),
+    );
   }
 
   void _onVoiceCommand() async {
@@ -327,6 +360,7 @@ class _RoutingPanelState extends State<RoutingPanel> {
       currentLng: currentPos?.longitude,
       currentUserId: FirebaseAuth.instance.currentUser?.uid ?? '',
       onNavigateTo: _handleDestinationSelected,
+      onAddWaypoint: (pos, name) => unawaited(_addWaypoint(pos, name)),
     ).dispatch(result);
   }
 
@@ -338,6 +372,9 @@ class _RoutingPanelState extends State<RoutingPanel> {
       await mapProvider.clearAll();
       mapProvider.clearRoutes();
       await mapProvider.drawDestinationMarker(destPos, placeName);
+      if (_waypoints.isNotEmpty) {
+        await mapProvider.drawWaypointMarkers(_waypoints.map((w) => w.pos).toList());
+      }
       setState(() {
         _previewDestPos = destPos;
         _polylineData = [];
@@ -367,7 +404,11 @@ class _RoutingPanelState extends State<RoutingPanel> {
       final startLat = currentPos?.latitude ?? 12.2388;
       final startPos = mapbox.Position(startLng, startLat);
 
-      final routes = await RouteUtils.getMultipleMapboxRoutes(startPos, _previewDestPos!);
+      final routes = await RouteUtils.getMultipleMapboxRoutes(
+        startPos,
+        _previewDestPos!,
+        viaWaypoints: _waypoints.map((w) => w.pos).toList(),
+      );
       if (!mounted) return;
       if (routes.isEmpty) { _showSnackbar('Không tìm thấy đường đi tới điểm này!'); return; }
 
@@ -497,82 +538,130 @@ class _RoutingPanelState extends State<RoutingPanel> {
     if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 
-  Widget _buildRouteSelector(MapStateProvider mapProvider) {
+  void _showWaypointSearchSheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => WaypointSearchSheet(
+        onSelected: (pos, name) {
+          Navigator.pop(context);
+          unawaited(_addWaypoint(pos, name));
+        },
+      ),
+    );
+  }
+
+  Future<void> _addWaypoint(mapbox.Position pos, String name) async {
+    final mapProvider = context.read<MapStateProvider>();
+    final wasNavigating = mapProvider.isNavigating;
+    setState(() => _waypoints.add(RouteWaypoint(pos: pos, name: name)));
+
+    if (wasNavigating) {
+      await _recalculateAndRestartNav();
+    } else {
+      if (mapProvider.availableRoutes.isNotEmpty || _polylineData.isNotEmpty) {
+        final destName = mapProvider.previewDestName ?? 'Điểm đến';
+        await mapProvider.clearAll();
+        mapProvider.clearRoutes();
+        setState(() => _polylineData = []);
+        if (_previewDestPos != null) {
+          await mapProvider.drawDestinationMarker(_previewDestPos!, destName, flyToMarker: false);
+        }
+      }
+      await mapProvider.drawWaypointMarkers(_waypoints.map((w) => w.pos).toList());
+      _showSnackbar('Đã thêm: $name');
+    }
+  }
+
+  Future<void> _removeWaypoint(int index) async {
+    final mapProvider = context.read<MapStateProvider>();
+    final wasNavigating = mapProvider.isNavigating;
+    setState(() => _waypoints.removeAt(index));
+
+    if (wasNavigating) {
+      await _recalculateAndRestartNav();
+    } else {
+      if (mapProvider.availableRoutes.isNotEmpty || _polylineData.isNotEmpty) {
+        final destName = mapProvider.previewDestName ?? 'Điểm đến';
+        await mapProvider.clearAll();
+        mapProvider.clearRoutes();
+        setState(() => _polylineData = []);
+        if (_previewDestPos != null) {
+          await mapProvider.drawDestinationMarker(_previewDestPos!, destName, flyToMarker: false);
+        }
+      }
+      await mapProvider.drawWaypointMarkers(_waypoints.map((w) => w.pos).toList());
+    }
+  }
+
+  void _moveWaypoint(int fromIndex, int toIndex) {
+    setState(() {
+      final item = _waypoints.removeAt(fromIndex);
+      _waypoints.insert(toIndex, item);
+    });
+    final mapProvider = context.read<MapStateProvider>();
+    if (mapProvider.availableRoutes.isNotEmpty) mapProvider.clearRoutesData();
+    unawaited(mapProvider.drawWaypointMarkers(_waypoints.map((w) => w.pos).toList()));
+  }
+
+  Future<void> _recalculateAndRestartNav() async {
+    if (_previewDestPos == null) return;
+    final mapProvider = context.read<MapStateProvider>();
+    final destName = mapProvider.previewDestName ?? 'Điểm đến';
+
+    _stopNavGpsStream();
+    _riskRefreshTimer?.cancel();
+    _arrivedNotified = false;
+    _announcedRiskIds.clear();
+    _lastRiskCheckMs = 0;
+
+    await mapProvider.clearAll();
+    mapProvider.clearRoutes();
+    setState(() => _polylineData = []);
+
+    await mapProvider.drawDestinationMarker(_previewDestPos!, destName, flyToMarker: false);
+    await mapProvider.drawWaypointMarkers(_waypoints.map((w) => w.pos).toList());
+
+    await _getDirections();
+    if (!mounted || mapProvider.availableRoutes.isEmpty) return;
+    await _startRouting();
+  }
+
+  Widget _buildRouteInfo(MapStateProvider mapProvider) {
     final routes = mapProvider.availableRoutes;
-    final fastestSecs = routes
-        .map((r) => (r['duration'] as num).toDouble())
-        .reduce((a, b) => a < b ? a : b);
     final selected = routes[mapProvider.selectedRouteIndex];
     final selKm = (selected['distance'] / 1000).toStringAsFixed(1);
     final selMins = (selected['duration'] / 60).round();
+    final timeText = selMins > 60
+        ? '${selMins ~/ 60} giờ ${selMins % 60} phút'
+        : '$selMins phút';
 
-    return Column(
-      mainAxisSize: MainAxisSize.min,
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.straighten, size: 16, color: Colors.blueAccent),
-            const SizedBox(width: 4),
-            Text('$selKm km', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.blueAccent)),
-            const SizedBox(width: 16),
-            const Icon(Icons.schedule, size: 16, color: Colors.blueAccent),
-            const SizedBox(width: 4),
-            Text(
-              selMins > 60 ? '${selMins ~/ 60} giờ ${selMins % 60} phút' : '$selMins phút',
-              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.blueAccent),
+        const Icon(Icons.straighten, size: 16, color: Colors.blueAccent),
+        const SizedBox(width: 4),
+        Text('$selKm km', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.blueAccent)),
+        const SizedBox(width: 16),
+        const Icon(Icons.schedule, size: 16, color: Colors.blueAccent),
+        const SizedBox(width: 4),
+        Text(timeText, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.blueAccent)),
+        if (routes.length > 1) ...[
+          const SizedBox(width: 12),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            decoration: BoxDecoration(
+              color: Colors.blue[50],
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.blue[200]!),
             ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: List.generate(routes.length, (index) {
-              final isSelected = mapProvider.selectedRouteIndex == index;
-              final durationMins = (routes[index]['duration'] / 60).round();
-              final isFastest = (routes[index]['duration'] as num).toDouble() == fastestSecs;
-              return Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 6.0),
-                child: ChoiceChip(
-                  label: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        'Tuyến ${index + 1}',
-                        style: TextStyle(fontWeight: isSelected ? FontWeight.bold : FontWeight.normal),
-                      ),
-                      Text(
-                        isFastest ? '$durationMins ph ✓' : '$durationMins ph',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: isFastest ? Colors.green[700] : Colors.grey[600],
-                          fontWeight: isFastest ? FontWeight.w600 : FontWeight.normal,
-                        ),
-                      ),
-                    ],
-                  ),
-                  selected: isSelected,
-                  selectedColor: Colors.blue[100],
-                  onSelected: (sel) async {
-                    if (!sel || index == mapProvider.selectedRouteIndex) return;
-                    mapProvider.selectRoute(index);
-                    await mapProvider.drawMultipleRoutesPreview();
-                    Position? cur;
-                    try { cur = await Geolocator.getCurrentPosition(timeLimit: const Duration(seconds: 3)); }
-                    catch (_) { cur = await Geolocator.getLastKnownPosition(); }
-                    await _loadRouteDetails(
-                      mapProvider.availableRoutes,
-                      index,
-                      mapbox.Position(cur?.longitude ?? 109.1967, cur?.latitude ?? 12.2388),
-                    );
-                  },
-                ),
-              );
-            }),
+            child: Text(
+              'T.${mapProvider.selectedRouteIndex + 1}/${routes.length}',
+              style: TextStyle(fontSize: 12, color: Colors.blue[700], fontWeight: FontWeight.w600),
+            ),
           ),
-        ),
+        ],
       ],
     );
   }
@@ -584,7 +673,35 @@ class _RoutingPanelState extends State<RoutingPanel> {
     final safePad = MediaQuery.of(context).padding.top;
     return Stack(
       children: [
-        if (!mapProvider.isNavigating)
+        if (_addingWaypointByMap)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Material(
+              color: Colors.blue,
+              borderRadius: BorderRadius.circular(25),
+              elevation: 4,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                child: Row(
+                  children: [
+                    const Icon(Icons.touch_app, color: Colors.white, size: 18),
+                    const SizedBox(width: 10),
+                    const Expanded(
+                      child: Text(
+                        'Nhấn bản đồ để chọn điểm dừng',
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                    GestureDetector(
+                      onTap: () => setState(() => _addingWaypointByMap = false),
+                      child: const Icon(Icons.close, color: Colors.white),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          )
+        else if (!mapProvider.isNavigating)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: RoutingSearchBar(
@@ -596,6 +713,8 @@ class _RoutingPanelState extends State<RoutingPanel> {
                 setState(() {
                   _previewDestPos = null;
                   _polylineData = [];
+                  _waypoints = [];
+                  _addingWaypointByMap = false;
                 });
               },
             ),
@@ -620,7 +739,50 @@ class _RoutingPanelState extends State<RoutingPanel> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 16),
+                if (_waypoints.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  ListView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: _waypoints.length,
+                    itemBuilder: (_, i) => _WaypointTile(
+                      key: ValueKey(i),
+                      index: i,
+                      name: _waypoints[i].name,
+                      onDelete: () => unawaited(_removeWaypoint(i)),
+                      onMoveUp: i > 0 ? () => _moveWaypoint(i, i - 1) : null,
+                      onMoveDown: i < _waypoints.length - 1 ? () => _moveWaypoint(i, i + 1) : null,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _showWaypointSearchSheet,
+                        icon: const Icon(Icons.add_location_alt, size: 15),
+                        label: const Text('Thêm điểm dừng', style: TextStyle(fontSize: 12)),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          side: const BorderSide(color: Colors.blue),
+                          foregroundColor: Colors.blue,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    OutlinedButton(
+                      onPressed: () => setState(() => _addingWaypointByMap = true),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                        side: const BorderSide(color: Colors.blue),
+                        foregroundColor: Colors.blue,
+                      ),
+                      child: const Icon(Icons.touch_app, size: 16),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
                 Row(
                   children: [
                     Expanded(
@@ -661,8 +823,36 @@ class _RoutingPanelState extends State<RoutingPanel> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                _buildRouteSelector(mapProvider),
-                const SizedBox(height: 16),
+                _buildRouteInfo(mapProvider),
+                if (_waypoints.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  ListView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: _waypoints.length,
+                    itemBuilder: (_, i) => _WaypointTile(
+                      key: ValueKey(i),
+                      index: i,
+                      name: _waypoints[i].name,
+                      onDelete: () => unawaited(_removeWaypoint(i)),
+                      onMoveUp: i > 0 ? () => _moveWaypoint(i, i - 1) : null,
+                      onMoveDown: i < _waypoints.length - 1 ? () => _moveWaypoint(i, i + 1) : null,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  onPressed: _showWaypointSearchSheet,
+                  icon: const Icon(Icons.add_location_alt, size: 15),
+                  label: const Text('Thêm điểm dừng', style: TextStyle(fontSize: 12)),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    side: const BorderSide(color: Colors.blue),
+                    foregroundColor: Colors.blue,
+                    minimumSize: const Size(double.infinity, 0),
+                  ),
+                ),
+                const SizedBox(height: 8),
                 ElevatedButton.icon(
                   onPressed: _startRouting,
                   icon: const Icon(Icons.two_wheeler, color: Colors.white),
@@ -745,21 +935,35 @@ class _RoutingPanelState extends State<RoutingPanel> {
                               : '${mapProvider.remainingDurationMins} phút',
                           style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.green),
                         ),
-                        const SizedBox(height: 4),
+                        const SizedBox(height: 2),
                         Text(
                           '${mapProvider.remainingDistanceKm.toStringAsFixed(1)} km • Đi bằng xe máy',
                           style: const TextStyle(fontSize: 14, color: Colors.grey),
                         ),
+                        if (_waypoints.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Text(
+                              '${_waypoints.length} điểm dừng trên đường',
+                              style: const TextStyle(fontSize: 12, color: Colors.blue, fontWeight: FontWeight.w500),
+                            ),
+                          ),
                       ],
                     ),
                   ),
                   Row(
                     children: [
                       FloatingActionButton.small(
+                        heroTag: 'add_wp_nav_fab',
+                        onPressed: _showWaypointSearchSheet,
+                        backgroundColor: Colors.blue,
+                        child: const Icon(Icons.add_location_alt, color: Colors.white, size: 18),
+                      ),
+                      const SizedBox(width: 6),
+                      FloatingActionButton.small(
                         heroTag: 'stop_nav_fab',
                         onPressed: () async {
                           _riskRefreshTimer?.cancel();
-                          // Chụp dữ liệu trước khi clearAll xóa state
                           final snapshot = _captureNavSnapshot(mapProvider);
                           _stopNavGpsStream();
                           await context.read<MapStateProvider>().clearAll();
@@ -767,8 +971,9 @@ class _RoutingPanelState extends State<RoutingPanel> {
                           setState(() {
                             _previewDestPos = null;
                             _polylineData = [];
+                            _waypoints = [];
+                            _addingWaypointByMap = false;
                           });
-                          // Lưu Firestore sau khi UI đã cập nhật, không block stop
                           if (snapshot != null) unawaited(_saveTripFromSnapshot(snapshot));
                         },
                         backgroundColor: Colors.redAccent,
@@ -836,6 +1041,57 @@ class _RoutingPanelState extends State<RoutingPanel> {
           ),
 
       ],
+    );
+  }
+}
+
+class _WaypointTile extends StatelessWidget {
+  final int index;
+  final String name;
+  final VoidCallback onDelete;
+  final VoidCallback? onMoveUp;
+  final VoidCallback? onMoveDown;
+
+  const _WaypointTile({
+    super.key,
+    required this.index,
+    required this.name,
+    required this.onDelete,
+    this.onMoveUp,
+    this.onMoveDown,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      key: key,
+      dense: true,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+      leading: Container(
+        width: 24, height: 24,
+        decoration: const BoxDecoration(color: Color(0xFF1A73E8), shape: BoxShape.circle),
+        alignment: Alignment.center,
+        child: Text('${index + 1}', style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
+      ),
+      title: Text(name, style: const TextStyle(fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          GestureDetector(
+            onTap: onMoveUp,
+            child: Icon(Icons.keyboard_arrow_up, size: 20, color: onMoveUp != null ? Colors.blue : Colors.grey[300]),
+          ),
+          GestureDetector(
+            onTap: onMoveDown,
+            child: Icon(Icons.keyboard_arrow_down, size: 20, color: onMoveDown != null ? Colors.blue : Colors.grey[300]),
+          ),
+          const SizedBox(width: 4),
+          GestureDetector(
+            onTap: onDelete,
+            child: const Icon(Icons.close, size: 16, color: Colors.red),
+          ),
+        ],
+      ),
     );
   }
 }

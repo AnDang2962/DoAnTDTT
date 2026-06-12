@@ -16,12 +16,12 @@ class RoutingSearchBar extends StatefulWidget {
   final String? destinationName;
 
   const RoutingSearchBar({
-    Key? key,
+    super.key,
     required this.onDestinationSelected,
     required this.onClear,
     this.onVoiceCommand,
     this.destinationName,
-  }) : super(key: key);
+  });
 
   @override
   State<RoutingSearchBar> createState() => _RoutingSearchBarState();

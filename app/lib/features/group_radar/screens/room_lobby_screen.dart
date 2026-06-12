@@ -206,7 +206,7 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
                 auth.currentUser!.uid: {
                   'displayName': user.name,
                   'role': _selectedRole,
-                  if (photoURL != null) 'photoURL': photoURL,
+                  'photoURL': ?photoURL,
                 }
               },
             }, SetOptions(merge: true));

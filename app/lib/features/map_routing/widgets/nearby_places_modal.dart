@@ -5,12 +5,14 @@ class NearbyPlacesModal extends StatelessWidget {
   final List<NearbyPlace> places;
   final String title;
   final void Function(NearbyPlace) onNavigateTo;
+  final void Function(NearbyPlace)? onAddWaypoint;
 
   const NearbyPlacesModal({
     super.key,
     required this.places,
     required this.title,
     required this.onNavigateTo,
+    this.onAddWaypoint,
   });
 
   static Future<void> show(
@@ -18,6 +20,7 @@ class NearbyPlacesModal extends StatelessWidget {
     required List<NearbyPlace> places,
     required String title,
     required void Function(NearbyPlace) onNavigateTo,
+    void Function(NearbyPlace)? onAddWaypoint,
   }) {
     return showModalBottomSheet(
       context: context,
@@ -29,6 +32,7 @@ class NearbyPlacesModal extends StatelessWidget {
         places: places,
         title: title,
         onNavigateTo: onNavigateTo,
+        onAddWaypoint: onAddWaypoint,
       ),
     );
   }
@@ -82,9 +86,20 @@ class NearbyPlacesModal extends StatelessWidget {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
-                        trailing: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
                           children: [
+                            if (onAddWaypoint != null)
+                              IconButton(
+                                icon: const Icon(Icons.add_location_alt, color: Colors.blue, size: 22),
+                                tooltip: 'Thêm điểm dừng',
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                onPressed: () {
+                                  Navigator.pop(context);
+                                  onAddWaypoint!(place);
+                                },
+                              ),
                             Text(
                               '${place.distanceKm} km',
                               style: const TextStyle(

@@ -163,12 +163,13 @@ class _LoginScreenState extends State<LoginScreen> {
 
   String _authErrorMessage(String code) {
     switch (code) {
-      case 'user-not-found': return 'Tài khoản không tồn tại';
-      case 'wrong-password': return 'Mật khẩu không đúng';
+      case 'invalid-credential':
+      case 'user-not-found':
+      case 'wrong-password': return 'Email hoặc mật khẩu không đúng';
       case 'invalid-email': return 'Email không hợp lệ';
       case 'user-disabled': return 'Tài khoản đã bị khóa';
       case 'too-many-requests': return 'Quá nhiều lần thử, vui lòng chờ';
-      default: return 'Đăng nhập thất bại, thử lại';
+      default: return 'Đăng nhập thất bại ($code)';
     }
   }
 

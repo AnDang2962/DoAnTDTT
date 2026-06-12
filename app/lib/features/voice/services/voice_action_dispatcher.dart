@@ -28,6 +28,7 @@ class VoiceActionDispatcher {
   final Map<String, dynamic> memberInfo;
   final String currentUserId;
   final OnNavigateTo? onNavigateTo;
+  final void Function(mapbox.Position pos, String name)? onAddWaypoint;
   final Future<void> Function(String message)? onGroupBroadcast;
   final bool isTooFar;
   final List<Map<String, dynamic>> gapDetails;
@@ -46,6 +47,7 @@ class VoiceActionDispatcher {
     this.memberInfo = const {},
     this.currentUserId = '',
     this.onNavigateTo,
+    this.onAddWaypoint,
     this.onGroupBroadcast,
     this.isTooFar = false,
     this.gapDetails = const [],
@@ -285,6 +287,9 @@ class VoiceActionDispatcher {
       onNavigateTo: (place) async {
         if (onNavigateTo != null) await onNavigateTo!(place.position, place.name);
       },
+      onAddWaypoint: onAddWaypoint != null
+          ? (place) => onAddWaypoint!(place.position, place.name)
+          : null,
     );
   }
 

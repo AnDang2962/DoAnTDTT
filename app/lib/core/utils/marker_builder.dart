@@ -186,6 +186,49 @@ class MarkerBuilder {
     return byteData!.buffer.asUint8List();
   }
 
+  static Future<Uint8List> buildWaypointPin(int number, {double devicePixelRatio = 3.0}) async {
+    const double R = 22.0;
+    const double tailH = 18.0;
+    const double pad = 8.0;
+    const double imgW = R * 2 + pad * 2;
+    const double imgH = pad + R * 2 + tailH;
+    const double cx = imgW / 2;
+    const double cy = pad + R;
+    const double tipY = imgH;
+    const Color blue = Color(0xFF1A73E8);
+
+    final double d = R + tailH;
+    final double hw = R * sqrt(d * d - R * R) / d;
+    final double baseY = cy + R * R / d;
+
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    canvas.scale(devicePixelRatio);
+
+    final path = Path()
+      ..moveTo(cx, tipY)
+      ..lineTo(cx - hw, baseY)
+      ..arcToPoint(Offset(cx + hw, baseY), radius: Radius.circular(R), largeArc: true, clockwise: true)
+      ..close();
+    canvas.drawPath(path, Paint()..color = blue);
+    canvas.drawCircle(Offset(cx, cy), R * 0.55, Paint()..color = Colors.white);
+
+    final tp = TextPainter(
+      text: TextSpan(
+        text: '$number',
+        style: TextStyle(color: blue, fontSize: R * 0.85, fontWeight: FontWeight.w900),
+      ),
+      textDirection: TextDirection.ltr,
+    );
+    tp.layout();
+    tp.paint(canvas, Offset(cx - tp.width / 2, cy - tp.height / 2));
+
+    final picture = recorder.endRecording();
+    final img = await picture.toImage((imgW * devicePixelRatio).toInt(), (imgH * devicePixelRatio).toInt());
+    final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
+    return byteData!.buffer.asUint8List();
+  }
+
   static Future<Uint8List> buildMemberBubble({
     required Color ringColor,
     String roleLabel = '',
