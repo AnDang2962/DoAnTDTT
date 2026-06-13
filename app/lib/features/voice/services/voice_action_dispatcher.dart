@@ -15,6 +15,7 @@ import '../../../features/map_routing/widgets/nearby_places_modal.dart';
 import '../../../features/map_routing/widgets/weather_detail_modal.dart';
 import '../../../features/group_radar/widgets/group_status_sheet.dart';
 import '../../../data/models/warning_marker.dart';
+import '../../../features/group_radar/presentation/providers/members_provider.dart';
 
 typedef OnNavigateTo = Future<void> Function(mapbox.Position dest, String name);
 
@@ -122,10 +123,14 @@ class VoiceActionDispatcher {
       await launchUrl(Uri.parse('tel:113'));
       return;
     }
+
+    final String leaderPhone = Provider.of<MembersProvider>(context, listen: false).leaderPhoneNumber ?? '';
+    
     _showSnackbar('Đang phát tín hiệu SOS...');
     await _tts.speak('Đang gửi SOS đến nhóm.');
     await _sos.sendEmergencySignal(
       roomId: roomId,
+      leaderPhoneNumber: leaderPhone,
       onStatusUpdate: (msg, _) => _showSnackbar(msg),
     );
   }

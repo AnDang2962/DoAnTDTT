@@ -14,47 +14,64 @@ class SosService {
   }
 
   Future<Map<String, dynamic>> _collectEmergencyData() async {
-    Position? position = await Geolocator.getLastKnownPosition();
-    position ??= await Geolocator.getCurrentPosition(
-      desiredAccuracy: LocationAccuracy.high,
-    );
-    int batteryLevel = await Battery().batteryLevel;
+    double lat = 0.0;
+    double lng = 0.0;
+    int batteryLevel = -1;
+
+    // Bọc Try-Catch để không bao giờ quăng lỗi ra ngoài gây crash
+    try {
+      Position? position = await Geolocator.getLastKnownPosition();
+      position ??= await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      );
+      lat = position.latitude;
+      lng = position.longitude;
+    } catch (e) {
+      debugPrint("Lỗi GPS: $e");
+    }
+
+    try {
+      batteryLevel = await Battery().batteryLevel;
+    } catch (e) {
+      debugPrint("Lỗi Pin: $e");
+    }
 
     return {
-      'lat': position.latitude,
-      'lng': position.longitude,
+      'lat': lat,
+      'lng': lng,
       'battery': batteryLevel,
     };
   }
 
   Future<void> sendEmergencySignal({
     required String roomId,
+    required String leaderPhoneNumber,
     required Function(String, Color) onStatusUpdate
   }) async {
+    // 🔥 Lấy data 1 lần duy nhất ở ngoài cùng để tái sử dụng trong cả try và catch
+    final data = await _collectEmergencyData();
+
     try {
-      final data = await _collectEmergencyData();
       final List<ConnectivityResult> connectivityResult = await (Connectivity().checkConnectivity());
 
       if (connectivityResult.contains(ConnectivityResult.none)) {
-        _sendSmsFallback(data);
+        _sendSmsFallback(data, leaderPhoneNumber);
         onStatusUpdate("Mất mạng! Đã kích hoạt SMS dự phòng.", Colors.orange);
       } else {
         onStatusUpdate("Đang phát tín hiệu SOS...", Colors.blue);
         
         final HttpsCallable callable = FirebaseFunctions.instanceFor(region: 'asia-southeast1').httpsCallable('sendSOS');
         
-        // 🔥 ĐỒNG BỘ 1: Đóng gói payload khớp 100% với yêu cầu của sos.js
         final params = {
           'roomId': roomId, 
           'lat': data['lat'],
           'lng': data['lng'],
-          // Sinh ra một mã duy nhất dựa trên thời gian (đảm bảo > 8 ký tự) để chống spam
+          'battery': data['battery'],
           'idempotencyKey': 'SOS_${DateTime.now().millisecondsSinceEpoch}', 
         };
         
         final HttpsCallableResult response = await callable.call(params);
         
-        // 🔥 ĐỒNG BỘ 2: Bắt đúng biến 'status' mà server trả về (DELIVERED, PARTIAL hoặc CACHED)
         final String? status = response.data['status'];
         if (status == 'DELIVERED' || status == 'PARTIAL' || status == 'CACHED') {
           onStatusUpdate("🆘 TÍN HIỆU ĐÃ PHÁT TỚI ĐỘI CỨU HỘ!", Colors.red);
@@ -66,25 +83,26 @@ class SosService {
       onStatusUpdate("Lỗi máy chủ: ${e.message}. Kích hoạt SMS...", Colors.black);
       debugPrint("Mã lỗi: ${e.code}");
       
-      final data = await _collectEmergencyData();
-      _sendSmsFallback(data);
+      // Tái sử dụng data, không gọi lại await _collectEmergencyData()
+      _sendSmsFallback(data, leaderPhoneNumber); 
     } catch (e) {
       onStatusUpdate("Lỗi kết nối mạng. Kích hoạt SMS...", Colors.black);
       
-      final data = await _collectEmergencyData();
-      _sendSmsFallback(data);
+      // Tái sử dụng data, không gọi lại await _collectEmergencyData()
+      _sendSmsFallback(data, leaderPhoneNumber); 
     }
   }
 
-  void _sendSmsFallback(Map<String, dynamic> data) async {
-    // 🔥 ĐỒNG BỘ 3: Fix lỗi hiển thị nội dung và sử dụng Link chuẩn của Google Maps
-    final String message = "SOS! Toi can giup. Vi tri: https://maps.google.com/?q=${data['lat']},${data['lng']} - Pin: ${data['battery']}%";
+  void _sendSmsFallback(Map<String, dynamic> data, String phoneNumber) async {
+    final String message = "SOS! Toi can giup. Vi tri: http://googleusercontent.com/maps.google.com/${data['lat']},${data['lng']} - Pin: ${data['battery']}%";
     
-    final Uri smsUri = Uri(
-      scheme: 'sms', 
-      path: '0901234567', 
-      queryParameters: {'body': message}
-    );
+    // Dọn dẹp số
+    String cleanPhone = phoneNumber.replaceAll(RegExp(r'\s+|-'), '');
+    
+    debugPrint("👉 Số điện thoại đang gửi: '$cleanPhone'");
+
+    // 🔥 Fix lỗi url_launcher mã hóa khoảng trắng thành dấu '+' trên Android
+    final Uri smsUri = Uri.parse('sms:$cleanPhone?body=${Uri.encodeComponent(message)}');
     
     if (await canLaunchUrl(smsUri)) {
       await launchUrl(smsUri);

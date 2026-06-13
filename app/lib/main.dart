@@ -26,7 +26,7 @@ import 'features/main_shell/main_shell_screen.dart';
 ///   - Release + emulator (cho demo 2 máy thật):
 ///     $ flutter run --release \
 ///         --dart-define=USE_EMULATOR=true \
-///         --dart-define=MAC_LAN_IP=192.168.2.14
+///         --dart-define=MAC_LAN_IP=192.168.0.111
 ///
 ///   - Production (sau này khi deploy backend):
 ///     $ flutter run --release
@@ -36,7 +36,7 @@ import 'features/main_shell/main_shell_screen.dart';
 const bool _useEmulator =
     bool.fromEnvironment('USE_EMULATOR', defaultValue: kDebugMode);
 const String _macLanIp =
-    String.fromEnvironment('MAC_LAN_IP', defaultValue: '192.168.2.14');
+    String.fromEnvironment('MAC_LAN_IP', defaultValue: '192.168.0.111');
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
