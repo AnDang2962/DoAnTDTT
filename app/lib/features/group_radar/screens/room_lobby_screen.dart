@@ -170,6 +170,16 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
       String? roomId;
 
       if (_isCreatingRoom) {
+
+        //  Kiểm tra số điện thoại của leader trước khi tạo phòng
+        final userDoc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+        final leaderPhone = userDoc.data()?['phoneNumber']?.toString() ?? '';
+
+        if (leaderPhone.isEmpty) {
+          _showError('Bạn phải cập nhật Số điện thoại trong Hồ sơ cá nhân trước khi làm Trưởng nhóm!');
+          return; // Thoát ngang. Khối finally ở cuối hàm sẽ tự động tắt _isLoading
+        }
+
         roomId = await _roomRepo.createRoom(user);
         if (roomId == null) {
           _showError('Tạo phòng từ Backend thất bại! Kiểm tra Emulator.');

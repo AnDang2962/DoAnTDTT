@@ -94,12 +94,18 @@ class SosService {
   }
 
   void _sendSmsFallback(Map<String, dynamic> data, String phoneNumber) async {
-    final String message = "SOS! Toi can giup. Vi tri: http://googleusercontent.com/maps.google.com/${data['lat']},${data['lng']} - Pin: ${data['battery']}%";
-    
-    // Dọn dẹp số
-    String cleanPhone = phoneNumber.replaceAll(RegExp(r'\s+|-'), '');
-    
-    debugPrint("👉 Số điện thoại đang gửi: '$cleanPhone'");
+    final int battery = data['battery'] as int? ?? -1;
+    final String batteryStr = battery == -1 ? 'Không rõ' : '$battery%';
+    final String message = "SOS! Toi can giup. Vi tri: https://maps.google.com/?q=${data['lat']},${data['lng']} - Pin: $batteryStr";
+
+    String cleanPhone = phoneNumber.replaceAll(RegExp(r'[\s\-]'), '');
+    //  Tự động gọi 112 nếu biến số điện thoại bị rỗng
+    if (cleanPhone.isEmpty) {
+      cleanPhone = "112";
+      debugPrint("⚠️ CẢNH BÁO: Leader không có số, tự động chuyển SMS đến cứu hộ quốc gia 112");
+    } else {
+      debugPrint("👉 Số điện thoại đang gửi: '$cleanPhone'");
+    }
 
     // 🔥 Fix lỗi url_launcher mã hóa khoảng trắng thành dấu '+' trên Android
     final Uri smsUri = Uri.parse('sms:$cleanPhone?body=${Uri.encodeComponent(message)}');
