@@ -1,16 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 class SOSMapOverlay extends StatefulWidget {
   final double latitude;
   final double longitude;
+  final VoidCallback? onNavigateToVictim;
 
   const SOSMapOverlay({
-    super.key, 
+    super.key,
     required this.latitude,
     required this.longitude,
+    this.onNavigateToVictim,
   });
 
   @override
@@ -58,17 +59,13 @@ class _SOSMapOverlayState extends State<SOSMapOverlay>
 
   Future<void> _onMapCreated(MapboxMap mapboxMap) async {
     _circleAnnotationManager = await mapboxMap.annotations.createCircleAnnotationManager();
-
-    // 1. Dấu chấm đỏ tâm vị trí nạn nhân
     await _circleAnnotationManager!.create(CircleAnnotationOptions(
       geometry: Point(coordinates: Position(widget.longitude, widget.latitude)),
       circleRadius: 12.0,
-      circleColor: 0xFFFF0000, 
+      circleColor: 0xFFFF0000,
       circleStrokeColor: 0xFFFFFFFF,
       circleStrokeWidth: 3.0,
     ));
-
-    // 2. Vòng tròn nhấp nháy 
     _pulseCircle = await _circleAnnotationManager!.create(CircleAnnotationOptions(
       geometry: Point(coordinates: Position(widget.longitude, widget.latitude)),
       circleRadius: 0.0,
@@ -84,32 +81,9 @@ class _SOSMapOverlayState extends State<SOSMapOverlay>
     super.dispose();
   }
 
-  Future<void> _launchGoogleMapsNavigation() async {
-    final double lat = widget.latitude;
-    final double lng = widget.longitude;
-    
-    // Ưu tiên 1: Ép mở chế độ Dẫn đường (Navigation) trên App Google Maps Android
-    final Uri appNavUrl = Uri.parse('google.navigation:q=$lat,$lng');
-    
-    // Ưu tiên 2: Fallback mở trình duyệt web hoặc App iOS với tọa độ đích
-    final Uri webNavUrl = Uri.parse(
-      'https://www.google.com/maps/dir/?api=1&destination=$lat,$lng'
-    );
-
-    try {
-      if (await canLaunchUrl(appNavUrl)) {
-        await launchUrl(appNavUrl, mode: LaunchMode.externalApplication);
-      } else {
-        await launchUrl(webNavUrl, mode: LaunchMode.externalApplication);
-      }
-    } catch (e) {
-      debugPrint('🚨 Lỗi mở chỉ đường: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Không thể mở hệ thống bản đồ!')),
-        );
-      }
-    }
+  void _handleNavigate() {
+    Navigator.of(context).pop();
+    widget.onNavigateToVictim!();
   }
 
   @override
@@ -132,34 +106,34 @@ class _SOSMapOverlayState extends State<SOSMapOverlay>
             onMapCreated: _onMapCreated,
           ),
 
-          // LỚP TRÊN: Nút bấm Dẫn đường khẩn cấp
-          Positioned(
-            bottom: 40,
-            left: 20,
-            right: 20,
-            child: ElevatedButton.icon(
-              onPressed: _launchGoogleMapsNavigation,
-              icon: const Icon(Icons.navigation, color: Colors.white, size: 28),
-              label: const Text(
-                "DẪN ĐƯỜNG ĐẾN NẠN NHÂN",
-                style: TextStyle(
-                  color: Colors.white, 
-                  fontSize: 16, 
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 1.2,
+          if (widget.onNavigateToVictim != null)
+            Positioned(
+              bottom: 40,
+              left: 20,
+              right: 20,
+              child: ElevatedButton.icon(
+                onPressed: _handleNavigate,
+                icon: const Icon(Icons.navigation, color: Colors.white, size: 28),
+                label: const Text(
+                  "DẪN ĐƯỜNG ĐẾN NẠN NHÂN",
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.2,
+                  ),
                 ),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red.shade700,
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                elevation: 10,
-                shadowColor: Colors.red.withValues(alpha: 0.5),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(30),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red.shade700,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  elevation: 10,
+                  shadowColor: Colors.red.withValues(alpha: 0.5),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(30),
+                  ),
                 ),
               ),
             ),
-          ),
         ],
       ),
     );

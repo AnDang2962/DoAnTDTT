@@ -14,9 +14,10 @@ import '../../main_map/providers/map_state_provider.dart';
 import '../presentation/providers/members_provider.dart';
 import 'group_radar_overlay.dart';
 
-// Dùng widget swap thay vì Navigator.push để giữ Provider scope của MainShellScreen.
 class RoomLobbyScreen extends StatefulWidget {
-  const RoomLobbyScreen({super.key});
+  final VoidCallback? onGoToProfile;
+
+  const RoomLobbyScreen({super.key, this.onGoToProfile});
 
   @override
   State<RoomLobbyScreen> createState() => _RoomLobbyScreenState();
@@ -85,8 +86,8 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
     );
     context.read<MapStateProvider>().clearAll();
     context.read<MembersProvider>().updateRoomIdForSOS(roomId);
-
     context.read<MembersProvider>().updateLeaderPhoneForSOS(leaderPhone);
+    context.read<MembersProvider>().updateUserRole(session['userRole']!);
 
     setState(() {
       _activeRoomId = roomId;
@@ -132,10 +133,41 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
     context.read<MapStateProvider>().clearAll();
     context.read<MembersProvider>().updateRoomIdForSOS('');
     context.read<MembersProvider>().updateLeaderPhoneForSOS('');
+    context.read<MembersProvider>().updateUserRole('');
     setState(() {
       _activeRoomId = null;
       _activeUser = null;
     });
+  }
+
+  void _showPhoneRequiredDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Cần số điện thoại'),
+        content: const Text(
+          'Leader cần có số điện thoại để các thành viên có thể nhận tin nhắn SOS khi mất kết nối internet.\n\nVui lòng cập nhật số điện thoại trong hồ sơ trước khi tạo phòng.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Để sau'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              widget.onGoToProfile?.call();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.primary,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            ),
+            child: const Text('Cập nhật ngay', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _handleAction() async {
@@ -149,13 +181,21 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
 
     final uid = auth.currentUser!.uid;
     String displayName = auth.currentUser!.displayName ?? '';
+    String phoneNumber = '';
     try {
       final doc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
-      final username = doc.data()?['username']?.toString() ?? '';
+      final data = doc.data();
+      final username = data?['username']?.toString() ?? '';
       if (username.isNotEmpty) displayName = username;
+      phoneNumber = data?['phoneNumber']?.toString() ?? '';
     } catch (_) {}
     if (displayName.isEmpty) {
       displayName = auth.currentUser!.email?.split('@').first ?? 'Người dùng';
+    }
+
+    if (_isCreatingRoom && _selectedRole == 'leader' && phoneNumber.isEmpty) {
+      if (mounted) _showPhoneRequiredDialog();
+      return;
     }
 
     setState(() => _isLoading = true);
@@ -229,9 +269,9 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
       if (!mounted) return;
       context.read<MapStateProvider>().clearAll();
       context.read<MembersProvider>().updateRoomIdForSOS(roomId);
-
       context.read<MembersProvider>().updateLeaderPhoneForSOS(leaderPhone);
-      
+      context.read<MembersProvider>().updateUserRole(_selectedRole);
+
       setState(() {
         _activeRoomId = roomId;
         _activeUser = user;

@@ -10,6 +10,7 @@ import 'package:route_mate_app/features/map_routing/screens/routing_panel.dart';
 import 'package:route_mate_app/features/sos_emergency/screens/sos_screen.dart';
 import 'package:route_mate_app/features/profile/screens/profile_screen.dart';
 import 'package:route_mate_app/features/group_radar/presentation/providers/members_provider.dart';
+import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mapbox;
 import 'package:route_mate_app/core/services/solo_room_service.dart';
 import 'package:route_mate_app/core/services/voice_service.dart';
 import 'package:route_mate_app/core/services/wake_word_service.dart';
@@ -31,7 +32,7 @@ class _MainShellScreenState extends State<MainShellScreen> {
   final VoiceService _voiceService = VoiceService();
   final WakeWordService _wakeWord = WakeWordService();
   bool _isVoiceListening = false;
-  BuildContext? _shellCtx; // Builder ctx — below MultiProvider, can read providers
+  BuildContext? _shellCtx;
 
   @override
   void initState() {
@@ -216,7 +217,11 @@ class _MainShellScreenState extends State<MainShellScreen> {
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (context) => SOSMapOverlay(latitude: lat, longitude: lng),
+                    builder: (_) => SOSMapOverlay(
+                      latitude: lat,
+                      longitude: lng,
+                      onNavigateToVictim: () => _navigateToSosVictim(lat, lng),
+                    ),
                   ),
                 );
               },
@@ -238,7 +243,11 @@ class _MainShellScreenState extends State<MainShellScreen> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => SOSMapOverlay(latitude: lat, longitude: lng),
+        builder: (_) => SOSMapOverlay(
+          latitude: lat,
+          longitude: lng,
+          onNavigateToVictim: () => _navigateToSosVictim(lat, lng),
+        ),
       ),
     );
   }
@@ -252,16 +261,32 @@ class _MainShellScreenState extends State<MainShellScreen> {
     final double? lat = double.tryParse(data['lat']?.toString() ?? '');
     final double? lng = double.tryParse(data['lng']?.toString() ?? '');
     if (lat == null || lng == null) return;
-    // Đợi widget tree sẵn sàng trước khi navigate
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) => SOSMapOverlay(latitude: lat, longitude: lng),
+          builder: (_) => SOSMapOverlay(
+            latitude: lat,
+            longitude: lng,
+            onNavigateToVictim: () => _navigateToSosVictim(lat, lng),
+          ),
         ),
       );
     });
+  }
+
+  void _navigateToSosVictim(double lat, double lng) {
+    final ctx = _shellCtx;
+    if (ctx == null || !mounted) return;
+
+    final members = ctx.read<MembersProvider>();
+    final mapProvider = ctx.read<MapStateProvider>();
+
+    mapProvider.setSosRoutingTarget(mapbox.Position(lng, lat));
+
+    final isLeader = members.userRole == 'leader' && members.roomId != null;
+    setState(() => _currentIndex = isLeader ? 1 : 0);
   }
 
   @override
@@ -276,7 +301,7 @@ class _MainShellScreenState extends State<MainShellScreen> {
         _shellCtx = ctx;
         final screens = [
           SafeArea(child: RoutingPanel(isActive: _currentIndex == 0)),
-          const RoomLobbyScreen(),
+          RoomLobbyScreen(onGoToProfile: () => setState(() => _currentIndex = 3)),
           const ColoredBox(color: Colors.white, child: SafeArea(child: SosScreen())),
           const ProfileScreen(),
         ];

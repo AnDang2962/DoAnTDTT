@@ -117,6 +117,7 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
       _mapProvider!.setMemberTapHandler((uid) { if (mounted) _showMemberDetail(uid); });
       if (widget.currentUser.role == UserRole.leader) {
         _mapProvider!.setRouteTapHandler(_onRouteTap);
+        _mapProvider!.addListener(_onMapProviderChanged);
       }
       _voiceProv = context.read<VoiceCommandProvider>();
       _voiceProv!.addListener(_onVoiceCommand);
@@ -1079,9 +1080,18 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
     _handleVoiceResult(prov.lastCommand);
   }
 
+  void _onMapProviderChanged() {
+    if (!mounted) return;
+    final target = _mapProvider?.sosRoutingTarget;
+    if (target == null) return;
+    _mapProvider?.clearSosRoutingTarget();
+    _handleDestinationSelected(target, 'Vị trí nạn nhân SOS');
+  }
+
   @override
   void dispose() {
     _voiceProv?.removeListener(_onVoiceCommand);
+    _mapProvider?.removeListener(_onMapProviderChanged);
     _mapProvider?.setMapTapHandler(null);
     _mapProvider?.setMarkerTapHandler(null);
     _mapProvider?.setMemberTapHandler(null);

@@ -76,6 +76,7 @@ class _RoutingPanelState extends State<RoutingPanel> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _mapProvider = context.read<MapStateProvider>();
+      _mapProvider!.addListener(_onSosTargetChanged);
       _startSoloRiskListener();
       _voiceProv = context.read<VoiceCommandProvider>();
       _voiceProv!.addListener(_onVoiceCommand);
@@ -115,6 +116,11 @@ class _RoutingPanelState extends State<RoutingPanel> {
     }
     if (widget.isActive && !oldWidget.isActive) {
       _startSoloRiskListener();
+      final sosTarget = _mapProvider?.sosRoutingTarget;
+      if (sosTarget != null) {
+        _mapProvider?.clearSosRoutingTarget();
+        unawaited(_handleDestinationSelected(sosTarget, 'Vị trí nạn nhân SOS'));
+      }
     }
   }
 
@@ -263,6 +269,7 @@ class _RoutingPanelState extends State<RoutingPanel> {
   @override
   void dispose() {
     _voiceProv?.removeListener(_onVoiceCommand);
+    _mapProvider?.removeListener(_onSosTargetChanged);
     _mapProvider?.setMapTapHandler(null);
     _mapProvider?.setMarkerTapHandler(null);
     _mapProvider?.setRouteTapHandler(null);
@@ -306,6 +313,14 @@ class _RoutingPanelState extends State<RoutingPanel> {
       routeIndex,
       mapbox.Position(cur?.longitude ?? 109.1967, cur?.latitude ?? 12.2388),
     );
+  }
+
+  void _onSosTargetChanged() {
+    if (!mounted || !widget.isActive) return;
+    final target = _mapProvider?.sosRoutingTarget;
+    if (target == null) return;
+    _mapProvider?.clearSosRoutingTarget();
+    unawaited(_handleDestinationSelected(target, 'Vị trí nạn nhân SOS'));
   }
 
   void _onVoiceCommand() async {

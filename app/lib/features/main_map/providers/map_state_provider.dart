@@ -37,6 +37,17 @@ class MapStateProvider extends ChangeNotifier {
     _groupModeActive = active;
   }
 
+  mapbox.Position? _sosRoutingTarget;
+  mapbox.Position? get sosRoutingTarget => _sosRoutingTarget;
+  void setSosRoutingTarget(mapbox.Position target) {
+    _sosRoutingTarget = target;
+    notifyListeners();
+  }
+  void clearSosRoutingTarget() {
+    _sosRoutingTarget = null;
+    notifyListeners();
+  }
+
   void Function(mapbox.Position)? _mapTapHandler;
 
   void setMapTapHandler(void Function(mapbox.Position)? handler) {
