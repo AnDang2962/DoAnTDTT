@@ -18,7 +18,6 @@ class SosService {
     double lng = 0.0;
     int batteryLevel = -1;
 
-    // Bọc Try-Catch để không bao giờ quăng lỗi ra ngoài gây crash
     try {
       Position? position = await Geolocator.getLastKnownPosition();
       position ??= await Geolocator.getCurrentPosition(
@@ -48,7 +47,6 @@ class SosService {
     required String leaderPhoneNumber,
     required Function(String, Color) onStatusUpdate
   }) async {
-    // 🔥 Lấy data 1 lần duy nhất ở ngoài cùng để tái sử dụng trong cả try và catch
     final data = await _collectEmergencyData();
 
     try {
@@ -83,13 +81,10 @@ class SosService {
       onStatusUpdate("Lỗi máy chủ: ${e.message}. Kích hoạt SMS...", Colors.black);
       debugPrint("Mã lỗi: ${e.code}");
       
-      // Tái sử dụng data, không gọi lại await _collectEmergencyData()
-      _sendSmsFallback(data, leaderPhoneNumber); 
+      _sendSmsFallback(data, leaderPhoneNumber);
     } catch (e) {
       onStatusUpdate("Lỗi kết nối mạng. Kích hoạt SMS...", Colors.black);
-      
-      // Tái sử dụng data, không gọi lại await _collectEmergencyData()
-      _sendSmsFallback(data, leaderPhoneNumber); 
+      _sendSmsFallback(data, leaderPhoneNumber);
     }
   }
 

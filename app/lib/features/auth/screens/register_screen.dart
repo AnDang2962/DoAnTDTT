@@ -1,4 +1,5 @@
 import 'dart:ui';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -72,8 +73,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
       );
     } on FirebaseAuthException catch (e) {
       _showError(_authError(e.code));
+      debugPrint('RegisterScreen FirebaseAuthException: ${e.code} — ${e.message}');
       if (mounted) setState(() => _loading = false);
-    } catch (_) {
+    } catch (e) {
+      debugPrint('RegisterScreen unexpected error: $e');
+      _showError('Đăng ký thất bại, thử lại');
       if (mounted) setState(() => _loading = false);
     }
   }
