@@ -7,6 +7,74 @@ class SosHistoryScreen extends StatelessWidget {
 
   const SosHistoryScreen({super.key, required this.roomId});
 
+  void _showSosDetailsDialog(BuildContext context, Map<String, dynamic> data, String timeStr) {
+    // Trích xuất các dữ liệu đã lưu trong sosLogs
+    final lat = data['lat']?.toString() ?? 'N/A';
+    final lng = data['lng']?.toString() ?? 'N/A';
+    final battery = data['battery']?.toString() ?? 'Không rõ';
+    final delivered = data['deliveredCount']?.toString() ?? '0';
+    final senderId = data['senderId']?.toString() ?? 'Không rõ';
+
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.emergency, color: Colors.red),
+              SizedBox(width: 8),
+              Text('Chi tiết SOS'),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildDetailRow(Icons.access_time, 'Thời gian:', timeStr),
+              const Divider(),
+              _buildDetailRow(Icons.person, 'Người gửi (UID):', senderId),
+              const SizedBox(height: 8),
+              _buildDetailRow(Icons.location_on, 'Tọa độ:', '$lat, $lng'),
+              const SizedBox(height: 8),
+              _buildDetailRow(Icons.battery_alert, 'Pin thiết bị:', '$battery%'),
+              const SizedBox(height: 8),
+              _buildDetailRow(Icons.send_rounded, 'Đã gửi tới:', '$delivered thiết bị'),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('ĐÓNG', style: TextStyle(fontWeight: FontWeight.bold)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  // Hàm phụ trợ để vẽ từng dòng chữ cho đẹp
+  Widget _buildDetailRow(IconData icon, String label, String value) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 20, color: Colors.grey.shade700),
+        const SizedBox(width: 8),
+        Expanded(
+          child: RichText(
+            text: TextSpan(
+              style: const TextStyle(color: Colors.black87, fontSize: 14),
+              children: [
+                TextSpan(text: '$label ', style: const TextStyle(fontWeight: FontWeight.bold)),
+                TextSpan(text: value),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -70,6 +138,9 @@ class SosHistoryScreen extends StatelessWidget {
                         ),
                         subtitle: Text('Thời điểm: $timeStr'),
                         trailing: const Icon(Icons.chevron_right),
+                        onTap: () {
+                          _showSosDetailsDialog(context, data, timeStr);
+                        },
                       ),
                     );
                   },

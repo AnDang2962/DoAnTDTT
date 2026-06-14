@@ -88,17 +88,25 @@ class _SOSMapOverlayState extends State<SOSMapOverlay>
     final double lat = widget.latitude;
     final double lng = widget.longitude;
     
-    final Uri googleMapsUrl = Uri.parse(
+    // Ưu tiên 1: Ép mở chế độ Dẫn đường (Navigation) trên App Google Maps Android
+    final Uri appNavUrl = Uri.parse('google.navigation:q=$lat,$lng');
+    
+    // Ưu tiên 2: Fallback mở trình duyệt web hoặc App iOS với tọa độ đích
+    final Uri webNavUrl = Uri.parse(
       'https://www.google.com/maps/dir/?api=1&destination=$lat,$lng'
     );
 
     try {
-      await launchUrl(googleMapsUrl, mode: LaunchMode.externalApplication);
+      if (await canLaunchUrl(appNavUrl)) {
+        await launchUrl(appNavUrl, mode: LaunchMode.externalApplication);
+      } else {
+        await launchUrl(webNavUrl, mode: LaunchMode.externalApplication);
+      }
     } catch (e) {
       debugPrint('🚨 Lỗi mở chỉ đường: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Không thể mở Google Maps!')),
+          const SnackBar(content: Text('Không thể mở hệ thống bản đồ!')),
         );
       }
     }

@@ -99,6 +99,7 @@ class _SosScreenState extends State<SosScreen> with TickerProviderStateMixin {
     if (_isSending) return;
 
     final currentRoomId = Provider.of<MembersProvider>(context, listen: false).roomId;
+    final leaderPhone = Provider.of<MembersProvider>(context, listen: false).leaderPhoneNumber ?? '';
 
     if (currentRoomId == null || currentRoomId.isEmpty) {
       _showStatus('Không thể gửi: Bạn chưa tham gia vào đội nhóm nào!', Colors.orange);
@@ -115,6 +116,7 @@ class _SosScreenState extends State<SosScreen> with TickerProviderStateMixin {
 
     await _sosService.sendEmergencySignal(
       roomId: currentRoomId,
+      leaderPhoneNumber: leaderPhone,
       onStatusUpdate: _showStatus,
     );
 

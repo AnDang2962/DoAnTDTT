@@ -76,6 +76,7 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
       return;
     }
 
+    final leaderPhone = await _fetchLeaderPhone(roomId);
     if (!mounted) return;
     final user = UserModel(
       id: uid,
@@ -84,6 +85,9 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
     );
     context.read<MapStateProvider>().clearAll();
     context.read<MembersProvider>().updateRoomIdForSOS(roomId);
+
+    context.read<MembersProvider>().updateLeaderPhoneForSOS(leaderPhone);
+
     setState(() {
       _activeRoomId = roomId;
       _activeUser = user;
@@ -127,6 +131,7 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
     context.read<MapStateProvider>().setGroupMode(false);
     context.read<MapStateProvider>().clearAll();
     context.read<MembersProvider>().updateRoomIdForSOS('');
+    context.read<MembersProvider>().updateLeaderPhoneForSOS('');
     setState(() {
       _activeRoomId = null;
       _activeUser = null;
@@ -220,9 +225,13 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
         userRole: _selectedRole,
       );
 
+      final leaderPhone = await _fetchLeaderPhone(roomId);
       if (!mounted) return;
       context.read<MapStateProvider>().clearAll();
       context.read<MembersProvider>().updateRoomIdForSOS(roomId);
+
+      context.read<MembersProvider>().updateLeaderPhoneForSOS(leaderPhone);
+      
       setState(() {
         _activeRoomId = roomId;
         _activeUser = user;
@@ -231,6 +240,23 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
       _showError('Lỗi không xác định: $e');
     } finally {
       if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+
+  Future<String> _fetchLeaderPhone(String roomId) async {
+    try {
+      final roomDoc = await FirebaseFirestore.instance.collection('rooms').doc(roomId).get();
+      final leaderId = roomDoc.data()?['leaderId']?.toString();
+
+      if (leaderId == null || leaderId.isEmpty) return "";
+
+      final userDoc = await FirebaseFirestore.instance.collection('users').doc(leaderId).get();
+      
+      // Lưu ý: Đảm bảo field lưu số điện thoại trong collection 'users' là 'phoneNumber'
+      return userDoc.data()?['phoneNumber']?.toString() ?? ""; 
+    } catch (e) {
+      return "";
     }
   }
 

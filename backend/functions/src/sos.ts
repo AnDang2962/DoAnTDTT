@@ -35,6 +35,8 @@ interface SosRequest {
   lng: number;
   /** UUID v4 do client sinh. Cùng key → cùng kết quả, không gửi lại FCM. */
   idempotencyKey: string;
+  // BỔ SUNG: Cho phép nhận thêm thông tin pin (có thể là số hoặc chuỗi)
+  battery?: number | string;
 }
 
 interface SosResult {
@@ -67,6 +69,9 @@ export const sendSOS = onCall<SosRequest, Promise<SosResult>>(
       'idempotencyKey',
       { minLen: 8, maxLen: 64 }
     );
+
+    // BỔ SUNG: Hứng dữ liệu pin (nếu app không gửi lên thì để 'Không rõ')
+    const battery = request.data?.battery ?? 'Không rõ';
 
     log.info('sos_received', { roomId, uid: auth.uid });
 
@@ -131,7 +136,8 @@ export const sendSOS = onCall<SosRequest, Promise<SosResult>>(
         tokens,
         notification: {
           title: '🆘 SOS!',
-          body: 'Một thành viên trong nhóm cần giúp đỡ!',
+          //  SỬA ĐOẠN NÀY: Ép thẳng phần trăm pin vào dòng chữ hiển thị
+          body: `Một thành viên đang cần giúp đỡ! Pin thiết bị: ${battery}%`,
         },
         data: {
           type: 'SOS',
@@ -139,6 +145,8 @@ export const sendSOS = onCall<SosRequest, Promise<SosResult>>(
           senderName: auth.name ?? '',
           lat: String(lat),
           lng: String(lng),
+          // BỔ SUNG: Đưa pin vào gói dữ liệu ngầm cho Flutter xử lý
+          battery: String(battery),
           timestamp: String(Date.now()),
         },
         android: { priority: 'high' },
@@ -177,6 +185,7 @@ export const sendSOS = onCall<SosRequest, Promise<SosResult>>(
         idempotencyKey,
         lat,
         lng,
+        battery, // BỔ SUNG: Lưu mức pin vào Firestore để kiểm tra sau này
         deliveredCount: fcmResult.successCount,
         failedCount: fcmResult.failureCount,
         cleanedTokens,
