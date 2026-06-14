@@ -168,6 +168,7 @@ class _MainShellScreenState extends State<MainShellScreen> {
   void _handleFcmMessage(RemoteMessage message) {
     if (!mounted) return;
     final data = message.data;
+    if (data['type'] != 'SOS') return;
     final double? lat = double.tryParse(data['lat']?.toString() ?? '');
     final double? lng = double.tryParse(data['lng']?.toString() ?? '');
     final String battery = data['battery']?.toString() ?? 'Không rõ';

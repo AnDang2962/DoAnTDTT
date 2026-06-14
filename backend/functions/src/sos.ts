@@ -114,7 +114,10 @@ export const sendSOS = onCall<SosRequest, Promise<SosResult>>(
 
     // === 5. Multicast FCM ===
     const tokenMap = room.fcmTokens ?? {};
-    const tokens = Object.values(tokenMap).filter((t): t is string => !!t);
+    // Lọc bỏ token của chính sender — nạn nhân không nhận lại SOS của mình
+    const tokens = Object.entries(tokenMap)
+      .filter(([uid, t]) => uid !== auth.uid && !!t)
+      .map(([, t]) => t as string);
     if (tokens.length === 0) {
       log.warn('sos_no_tokens', { roomId, uid: auth.uid });
       const result: SosResult = {
