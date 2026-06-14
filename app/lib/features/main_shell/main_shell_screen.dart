@@ -43,6 +43,8 @@ class _MainShellScreenState extends State<MainShellScreen> {
     SoloRoomService.ensureSoloRoom();
     FirebaseMessaging.instance.requestPermission();
     FirebaseMessaging.onMessage.listen(_handleFcmMessage);
+    FirebaseMessaging.onMessageOpenedApp.listen(_handleFcmTap);
+    _checkInitialMessage();
   }
 
   @override
@@ -224,6 +226,42 @@ class _MainShellScreenState extends State<MainShellScreen> {
         ],
       ),
     );
+  }
+
+  // App đang nền → user tap notification → navigate thẳng vào SOSMapOverlay
+  void _handleFcmTap(RemoteMessage message) {
+    final data = message.data;
+    if (data['type'] != 'SOS') return;
+    final double? lat = double.tryParse(data['lat']?.toString() ?? '');
+    final double? lng = double.tryParse(data['lng']?.toString() ?? '');
+    if (lat == null || lng == null || !mounted) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SOSMapOverlay(latitude: lat, longitude: lng),
+      ),
+    );
+  }
+
+  // App bị tắt hoàn toàn → user tap notification → check và navigate
+  Future<void> _checkInitialMessage() async {
+    final message = await FirebaseMessaging.instance.getInitialMessage();
+    if (message == null) return;
+    final data = message.data;
+    if (data['type'] != 'SOS') return;
+    final double? lat = double.tryParse(data['lat']?.toString() ?? '');
+    final double? lng = double.tryParse(data['lng']?.toString() ?? '');
+    if (lat == null || lng == null) return;
+    // Đợi widget tree sẵn sàng trước khi navigate
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => SOSMapOverlay(latitude: lat, longitude: lng),
+        ),
+      );
+    });
   }
 
   @override
