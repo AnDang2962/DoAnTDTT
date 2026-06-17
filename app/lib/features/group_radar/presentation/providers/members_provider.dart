@@ -11,11 +11,14 @@ class MembersProvider extends ChangeNotifier {
 
   void updateRoomIdForSOS(String id) {
     _currentRoomId = id.isEmpty ? null : id;
+    notifyListeners();
   }
   void updateLeaderPhoneForSOS(String phoneNumber) {
     _leaderPhoneNumber = phoneNumber.isEmpty ? null : phoneNumber;
+    notifyListeners();
   }
   void updateUserRole(String role) {
     _userRole = role.isEmpty ? null : role;
+    notifyListeners();
   }
 }

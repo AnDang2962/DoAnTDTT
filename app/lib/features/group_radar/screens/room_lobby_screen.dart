@@ -293,8 +293,7 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
 
       final userDoc = await FirebaseFirestore.instance.collection('users').doc(leaderId).get();
       
-      // Lưu ý: Đảm bảo field lưu số điện thoại trong collection 'users' là 'phoneNumber'
-      return userDoc.data()?['phoneNumber']?.toString() ?? ""; 
+      return userDoc.data()?['phoneNumber']?.toString() ?? '';
     } catch (e) {
       return "";
     }

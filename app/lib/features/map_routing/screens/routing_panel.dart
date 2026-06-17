@@ -193,7 +193,10 @@ class _RoutingPanelState extends State<RoutingPanel> {
     if (now - _lastRiskCheckMs < 5000) return;
     _lastRiskCheckMs = now;
 
-    final allRisks = {..._realtimeRisks.map((r) => r), ..._crossGroupRisks}.toList();
+    final seen = <String>{};
+    final allRisks = [..._realtimeRisks, ..._crossGroupRisks]
+        .where((r) => seen.add(r.id))
+        .toList();
     final announcements = <String>[];
     for (final risk in allRisks) {
       if (_announcedRiskIds.contains(risk.id)) continue;
@@ -384,7 +387,7 @@ class _RoutingPanelState extends State<RoutingPanel> {
     setState(() => _isLoading = true);
     try {
       final mapProvider = context.read<MapStateProvider>();
-      await mapProvider.clearAll();
+      await mapProvider.clearAll(keepMemberMarkers: mapProvider.isGroupModeActive);
       mapProvider.clearRoutes();
       await mapProvider.drawDestinationMarker(destPos, placeName);
       if (_waypoints.isNotEmpty) {

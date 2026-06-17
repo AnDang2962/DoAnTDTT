@@ -155,8 +155,7 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
           mapProvider.easeTo(_myLastPos!, bearing: pos.heading >= 0 ? pos.heading : null);
         }
         if (mapProvider.isNavigating) {
-          final heading = pos.heading >= 0 ? pos.heading : null;
-          unawaited(mapProvider.setNavArrow(_myLastPos!, bearing: heading));
+          unawaited(mapProvider.setNavArrow(_myLastPos!));
           _checkNearbyRisks();
           if (!_arrivedNotified && mapProvider.remainingDistanceKm < 0.3) {
             _arrivedNotified = true;

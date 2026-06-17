@@ -25,11 +25,12 @@ class _SOSMapOverlayState extends State<SOSMapOverlay>
 
   CircleAnnotationManager? _circleAnnotationManager;
   CircleAnnotation? _pulseCircle;
+  bool _updatingCircle = false;
 
   @override
   void initState() {
     super.initState();
-    
+
     final String mapboxToken = dotenv.env['MAPBOX_PUBLIC_KEY'] ?? '';
     MapboxOptions.setAccessToken(mapboxToken);
 
@@ -46,15 +47,11 @@ class _SOSMapOverlayState extends State<SOSMapOverlay>
   }
 
   void _updatePulsingCircle() {
-    if (_circleAnnotationManager != null && _pulseCircle != null) {
-      final double currentRadius = 150 * _animation.value;
-      final double currentAlpha = 0.5 * (1.0 - _animation.value);
-
-      _pulseCircle?.circleRadius = currentRadius;
-      _pulseCircle?.circleOpacity = currentAlpha;
-      
-      _circleAnnotationManager?.update(_pulseCircle!);
-    }
+    if (_circleAnnotationManager == null || _pulseCircle == null || _updatingCircle) return;
+    _updatingCircle = true;
+    _pulseCircle!.circleRadius = 150 * _animation.value;
+    _pulseCircle!.circleOpacity = 0.5 * (1.0 - _animation.value);
+    _circleAnnotationManager!.update(_pulseCircle!).whenComplete(() => _updatingCircle = false);
   }
 
   Future<void> _onMapCreated(MapboxMap mapboxMap) async {

@@ -168,12 +168,20 @@ class _MainShellScreenState extends State<MainShellScreen> {
     );
   }
 
+  ({double lat, double lng})? _parseSosLatLng(Map<String, dynamic> data) {
+    final lat = double.tryParse(data['lat']?.toString() ?? '');
+    final lng = double.tryParse(data['lng']?.toString() ?? '');
+    if (lat == null || lng == null) return null;
+    return (lat: lat, lng: lng);
+  }
+
   void _handleFcmMessage(RemoteMessage message) {
     if (!mounted) return;
     final data = message.data;
     if (data['type'] != 'SOS') return;
-    final double? lat = double.tryParse(data['lat']?.toString() ?? '');
-    final double? lng = double.tryParse(data['lng']?.toString() ?? '');
+    final pos = _parseSosLatLng(data);
+    final double? lat = pos?.lat;
+    final double? lng = pos?.lng;
     final String battery = data['battery']?.toString() ?? 'Không rõ';
 
     showDialog(
@@ -199,7 +207,7 @@ class _MainShellScreenState extends State<MainShellScreen> {
             ),
             const SizedBox(height: 12),
             Text(
-              'Pin nạn nhân: $battery%',
+              battery == '-1' ? 'Pin nạn nhân: Không rõ' : 'Pin nạn nhân: $battery%',
               style: TextStyle(color: Colors.red.shade700, fontWeight: FontWeight.w600),
             ),
           ],
@@ -237,9 +245,9 @@ class _MainShellScreenState extends State<MainShellScreen> {
   void _handleFcmTap(RemoteMessage message) {
     final data = message.data;
     if (data['type'] != 'SOS') return;
-    final double? lat = double.tryParse(data['lat']?.toString() ?? '');
-    final double? lng = double.tryParse(data['lng']?.toString() ?? '');
-    if (lat == null || lng == null || !mounted) return;
+    final pos = _parseSosLatLng(data);
+    if (pos == null || !mounted) return;
+    final (lat: lat, lng: lng) = pos;
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -258,9 +266,9 @@ class _MainShellScreenState extends State<MainShellScreen> {
     if (message == null) return;
     final data = message.data;
     if (data['type'] != 'SOS') return;
-    final double? lat = double.tryParse(data['lat']?.toString() ?? '');
-    final double? lng = double.tryParse(data['lng']?.toString() ?? '');
-    if (lat == null || lng == null) return;
+    final pos = _parseSosLatLng(data);
+    if (pos == null) return;
+    final (lat: lat, lng: lng) = pos;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       Navigator.push(

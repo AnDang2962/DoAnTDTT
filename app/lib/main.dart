@@ -36,7 +36,7 @@ import 'features/main_shell/main_shell_screen.dart';
 const bool _useEmulator =
     bool.fromEnvironment('USE_EMULATOR', defaultValue: kDebugMode);
 const String _macLanIp =
-    String.fromEnvironment('MAC_LAN_IP', defaultValue: '192.168.2.14');
+    String.fromEnvironment('MAC_LAN_IP', defaultValue: '172.20.10.8');
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();

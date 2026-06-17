@@ -90,19 +90,18 @@ class MapStateProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> setNavArrow(mapbox.Position pos, {double? bearing}) async {
+  Future<void> setNavArrow(mapbox.Position pos) async {
     if (_pointManager == null) return;
     _navArrowImage ??= await MarkerBuilder.buildNavigationArrow();
     if (_navArrow != null) {
       _navArrow!.geometry = mapbox.Point(coordinates: pos);
-      if (bearing != null) _navArrow!.iconRotate = bearing;
       try { await _pointManager!.update(_navArrow!); } catch (_) {}
     } else {
       _navArrow = await _pointManager!.create(mapbox.PointAnnotationOptions(
         geometry: mapbox.Point(coordinates: pos),
         image: _navArrowImage,
         iconAnchor: mapbox.IconAnchor.CENTER,
-        iconRotate: bearing ?? 0,
+        iconRotate: 0,
       ));
     }
   }
@@ -206,7 +205,6 @@ class MapStateProvider extends ChangeNotifier {
     final remaining = [currentPos, ..._fullRouteCoords.sublist(bestIdx + 1)];
     if (remaining.length < 2) return;
 
-    // Tính lại km + thời gian còn lại
     double remDistM = 0.0;
     for (int i = 0; i < remaining.length - 1; i++) {
       remDistM += calculateDistanceMeters(
@@ -226,9 +224,9 @@ class MapStateProvider extends ChangeNotifier {
     if (passed.length >= 2) {
       await _polylineManager!.create(mapbox.PolylineAnnotationOptions(
         geometry: mapbox.LineString(coordinates: passed),
-        lineColor: 0xFFBDBDBD,
+        lineColor: 0xFF616161,
         lineWidth: 4.0,
-        lineOpacity: 0.6,
+        lineOpacity: 1.0,
       ));
     }
 
@@ -277,19 +275,19 @@ class MapStateProvider extends ChangeNotifier {
 
   Future<void> onMapCreated(mapbox.MapboxMap mapboxMap) async {
     _mapboxMap = mapboxMap;
-    _pointManager = await mapboxMap.annotations.createPointAnnotationManager();
-    _markerTapSub = _pointManager!.tapEvents(onTap: (annotation) {
-      final marker = _weatherMarkerData[annotation.id] ?? _riskMarkerData[annotation.id];
-      if (marker != null) { _markerTapHandler?.call(marker); return; }
-      final uid = _memberAnnotationUidMap[annotation.id];
-      if (uid != null) _memberTapHandler?.call(uid);
-    });
     _polylineManager = await mapboxMap.annotations.createPolylineAnnotationManager();
     _polylineTapSub?.cancel();
     _polylineTapSub = _polylineManager!.tapEvents(onTap: (annotation) {
       _lastPolylineTapMs = DateTime.now().millisecondsSinceEpoch;
       final idx = _routeAnnotationIndexMap[annotation.id];
       if (idx != null) _routeTapHandler?.call(idx);
+    });
+    _pointManager = await mapboxMap.annotations.createPointAnnotationManager();
+    _markerTapSub = _pointManager!.tapEvents(onTap: (annotation) {
+      final marker = _weatherMarkerData[annotation.id] ?? _riskMarkerData[annotation.id];
+      if (marker != null) { _markerTapHandler?.call(marker); return; }
+      final uid = _memberAnnotationUidMap[annotation.id];
+      if (uid != null) _memberTapHandler?.call(uid);
     });
     await _mapboxMap?.location.updateSettings(
       mapbox.LocationComponentSettings(enabled: true, pulsingEnabled: true),

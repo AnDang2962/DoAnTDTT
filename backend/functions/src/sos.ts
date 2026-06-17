@@ -140,7 +140,7 @@ export const sendSOS = onCall<SosRequest, Promise<SosResult>>(
         notification: {
           title: '🆘 SOS!',
           //  SỬA ĐOẠN NÀY: Ép thẳng phần trăm pin vào dòng chữ hiển thị
-          body: `Một thành viên đang cần giúp đỡ! Pin thiết bị: ${battery}%`,
+          body: `${auth.name ?? 'Một thành viên'} đang cần giúp đỡ! Pin thiết bị: ${battery}%`,
         },
         data: {
           type: 'SOS',

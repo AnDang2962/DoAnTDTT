@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import 'dart:async';
 import 'dart:ui' as ui;
 import 'package:provider/provider.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'sos_history_screen.dart';
 
 import '../services/sos_service.dart';
@@ -15,19 +17,22 @@ class SosScreen extends StatefulWidget {
   State<SosScreen> createState() => _SosScreenState();
 }
 
-class _SosScreenState extends State<SosScreen> with TickerProviderStateMixin {
+class _SosScreenState extends State<SosScreen>
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   late AnimationController _pulseController;
   late AnimationController _rippleController;
   Timer? _countdownTimer;
   double _currentProgress = 0.0;
   bool _isHolding = false;
   bool _isSending = false;
+  String? _pendingCallPhone;
 
   final SosService _sosService = SosService();
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _pulseController = AnimationController(vsync: this, duration: const Duration(seconds: 1))..repeat(reverse: true);
     _rippleController = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500));
     _sosService.checkAndRequestPermissions();
@@ -35,10 +40,35 @@ class _SosScreenState extends State<SosScreen> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _pulseController.dispose();
     _rippleController.dispose();
     _countdownTimer?.cancel();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _pendingCallPhone != null) {
+      final phone = _pendingCallPhone!;
+      _pendingCallPhone = null;
+      _sosService.makeCall(phone);
+    }
+  }
+
+  Future<List<String>> _getEmergencyContacts() async {
+    try {
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (uid == null) return [];
+      final doc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+      final contacts = doc.data()?['emergencyContacts'];
+      if (contacts is List) {
+        return contacts.map((e) => e.toString()).where((s) => s.isNotEmpty).toList();
+      }
+    } catch (e) {
+      debugPrint('Lỗi lấy emergency contacts: $e');
+    }
+    return [];
   }
 
   void _showStatus(String message, Color color) {
@@ -89,10 +119,10 @@ class _SosScreenState extends State<SosScreen> with TickerProviderStateMixin {
 
   void _executeSOS() async {
     _countdownTimer?.cancel();
+    _rippleController.stop();
+    _rippleController.reset();
     setState(() {
       _isHolding = false;
-      _rippleController.stop();
-      _rippleController.reset();
       _currentProgress = 0.0;
     });
 
@@ -101,26 +131,34 @@ class _SosScreenState extends State<SosScreen> with TickerProviderStateMixin {
     final currentRoomId = Provider.of<MembersProvider>(context, listen: false).roomId;
     final leaderPhone = Provider.of<MembersProvider>(context, listen: false).leaderPhoneNumber ?? '';
 
-    if (currentRoomId == null || currentRoomId.isEmpty) {
-      _showStatus('Không thể gửi: Bạn chưa tham gia vào đội nhóm nào!', Colors.orange);
-      return;
-    }
-
     setState(() => _isSending = true);
-    _showStatus('Đang thu thập tọa độ và phát tín hiệu...', Colors.blue);
 
     for (int i = 0; i < 5; i++) {
       HapticFeedback.vibrate();
       await Future.delayed(const Duration(milliseconds: 150));
     }
 
-    await _sosService.sendEmergencySignal(
-      roomId: currentRoomId,
-      leaderPhoneNumber: leaderPhone,
-      onStatusUpdate: _showStatus,
-    );
+    String? phoneToCall;
+    if (currentRoomId == null || currentRoomId.isEmpty) {
+      final contacts = await _getEmergencyContacts();
+      phoneToCall = await _sosService.sendSoloEmergencySignal(
+        emergencyContacts: contacts,
+        onStatusUpdate: _showStatus,
+      );
+    } else {
+      _showStatus('Đang thu thập tọa độ và phát tín hiệu...', Colors.blue);
+      phoneToCall = await _sosService.sendEmergencySignal(
+        roomId: currentRoomId,
+        leaderPhoneNumber: leaderPhone,
+        onStatusUpdate: _showStatus,
+      );
+    }
 
+    // Đặt lại UI trước khi mở app ngoài để tránh màn hình đen khi quay lại
     if (mounted) setState(() => _isSending = false);
+
+    // Gọi điện khi user quay lại từ app SMS (xử lý trong didChangeAppLifecycleState)
+    if (phoneToCall != null) _pendingCallPhone = phoneToCall;
   }
 
   @override

@@ -111,7 +111,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (mounted) setState(() => _isLoading = false);
   }
 
-  Future<void> _updateProfileInfo(String newName, String newUsername, String phone) async {
+  Future<void> _updateProfileInfo(String newName, String newUsername, String phone, String emergencyContact) async {
     if (currentUser == null || newUsername.isEmpty || newName.isEmpty) return;
 
     await Future.wait([
@@ -119,6 +119,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         'name': newName,
         'username': newUsername,
         'phoneNumber': phone,
+        'emergencyContacts': emergencyContact.isNotEmpty ? [emergencyContact] : [],
       }),
       currentUser!.updateDisplayName(newName),
     ]);
@@ -138,24 +139,40 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final nameController = TextEditingController(text: userData?['name'] ?? '');
     final userController = TextEditingController(text: userData?['username'] ?? '');
     final phoneController = TextEditingController(text: userData?['phoneNumber'] ?? '');
+    final contacts = userData?['emergencyContacts'];
+    final emergencyController = TextEditingController(
+      text: (contacts is List && contacts.isNotEmpty) ? contacts.first.toString() : '',
+    );
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('Thông tin cá nhân', style: TextStyle(fontWeight: FontWeight.bold, color: AppTheme.primary)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(controller: nameController, decoration: const InputDecoration(labelText: 'Họ và tên')),
-            const SizedBox(height: 12),
-            TextField(controller: userController, decoration: const InputDecoration(labelText: 'Biệt danh (hiển thị trên Radar)')),
-            const SizedBox(height: 12),
-            TextField(
-              controller: phoneController,
-              decoration: const InputDecoration(labelText: 'Số điện thoại'),
-              keyboardType: TextInputType.phone,
-            ),
-          ],
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(controller: nameController, decoration: const InputDecoration(labelText: 'Họ và tên')),
+              const SizedBox(height: 12),
+              TextField(controller: userController, decoration: const InputDecoration(labelText: 'Biệt danh (hiển thị trên Radar)')),
+              const SizedBox(height: 12),
+              TextField(
+                controller: phoneController,
+                decoration: const InputDecoration(labelText: 'Số điện thoại'),
+                keyboardType: TextInputType.phone,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: emergencyController,
+                decoration: const InputDecoration(
+                  labelText: 'Số liên hệ khẩn cấp (SOS)',
+                  hintText: 'Người thân, bạn bè...',
+                  prefixIcon: Icon(Icons.emergency_rounded, color: Colors.red),
+                ),
+                keyboardType: TextInputType.phone,
+              ),
+            ],
+          ),
         ),
         actions: [
           TextButton(
@@ -165,7 +182,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ElevatedButton(
             onPressed: () {
               Navigator.pop(context);
-              _updateProfileInfo(nameController.text.trim(), userController.text.trim(), phoneController.text.trim());
+              _updateProfileInfo(
+                nameController.text.trim(),
+                userController.text.trim(),
+                phoneController.text.trim(),
+                emergencyController.text.trim(),
+              );
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: AppTheme.primary,
