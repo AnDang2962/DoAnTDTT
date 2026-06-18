@@ -1,9 +1,7 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'qr_scanner_screen.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:provider/provider.dart';
-import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../../../core/theme/app_theme.dart';
@@ -16,8 +14,9 @@ import 'group_radar_overlay.dart';
 
 class RoomLobbyScreen extends StatefulWidget {
   final VoidCallback? onGoToProfile;
+  final void Function(double lat, double lng)? onSosNavigate;
 
-  const RoomLobbyScreen({super.key, this.onGoToProfile});
+  const RoomLobbyScreen({super.key, this.onGoToProfile, this.onSosNavigate});
 
   @override
   State<RoomLobbyScreen> createState() => _RoomLobbyScreenState();
@@ -212,7 +211,7 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
       if (_isCreatingRoom) {
         roomId = await _roomRepo.createRoom(user);
         if (roomId == null) {
-          _showError('Tạo phòng từ Backend thất bại! Kiểm tra Emulator.');
+          _showError('Tạo phòng thất bại, vui lòng thử lại.');
           return;
         }
         _showSuccess('Đã tạo phòng: $roomId');
@@ -232,21 +231,11 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
       }
 
       try {
-        // Trên iOS, APNS phải sẵn sàng trước khi lấy FCM token.
-        // Simulator không có APNS → skip để tránh lỗi.
-        String? token;
-        if (Platform.isIOS) {
-          final apns = await FirebaseMessaging.instance.getAPNSToken();
-          if (apns != null) token = await FirebaseMessaging.instance.getToken();
-        } else {
-          token = await FirebaseMessaging.instance.getToken();
-        }
         final photoURL = auth.currentUser!.photoURL;
         await FirebaseFirestore.instance
             .collection('rooms')
             .doc(roomId)
             .set({
-              'fcmTokens': {auth.currentUser!.uid: token ?? ''},
               'memberInfo': {
                 auth.currentUser!.uid: {
                   'displayName': user.name,
@@ -256,7 +245,7 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
               },
             }, SetOptions(merge: true));
       } catch (e) {
-        debugPrint('Lỗi cập nhật FCM/profile: $e');
+        debugPrint('Lỗi cập nhật profile: $e');
       }
 
       await RoomSessionService.save(
@@ -306,6 +295,7 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
         roomId: _activeRoomId!,
         currentUser: _activeUser!,
         onLeaveRoom: _onLeaveRoom,
+        onSosNavigate: widget.onSosNavigate,
       );
     }
 

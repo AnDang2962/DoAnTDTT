@@ -25,7 +25,7 @@ class _SosScreenState extends State<SosScreen>
   double _currentProgress = 0.0;
   bool _isHolding = false;
   bool _isSending = false;
-  String? _pendingCallPhone;
+  VoidCallback? _pendingAction;
 
   final SosService _sosService = SosService();
 
@@ -49,10 +49,10 @@ class _SosScreenState extends State<SosScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && _pendingCallPhone != null) {
-      final phone = _pendingCallPhone!;
-      _pendingCallPhone = null;
-      _sosService.makeCall(phone);
+    if (state == AppLifecycleState.resumed && _pendingAction != null) {
+      final action = _pendingAction!;
+      _pendingAction = null;
+      action();
     }
   }
 
@@ -117,6 +117,8 @@ class _SosScreenState extends State<SosScreen>
     _rippleController.reset();
   }
 
+
+
   void _executeSOS() async {
     _countdownTimer?.cancel();
     _rippleController.stop();
@@ -138,27 +140,36 @@ class _SosScreenState extends State<SosScreen>
       await Future.delayed(const Duration(milliseconds: 150));
     }
 
-    String? phoneToCall;
+    final data = await _sosService.collectEmergencyData();
+    String phoneToCall;
+    List<String> smsContacts;
+
     if (currentRoomId == null || currentRoomId.isEmpty) {
       final contacts = await _getEmergencyContacts();
-      phoneToCall = await _sosService.sendSoloEmergencySignal(
-        emergencyContacts: contacts,
-        onStatusUpdate: _showStatus,
-      );
+      smsContacts = contacts.isNotEmpty ? contacts : [SosService.fallbackEmergencyContact];
+      phoneToCall = smsContacts.first;
+      _showStatus('🆘 Đang gọi cứu hộ...', Colors.red);
     } else {
       _showStatus('Đang thu thập tọa độ và phát tín hiệu...', Colors.blue);
-      phoneToCall = await _sosService.sendEmergencySignal(
+      final isOnline = await _sosService.sendGroupFcmNotification(
         roomId: currentRoomId,
-        leaderPhoneNumber: leaderPhone,
+        data: data,
         onStatusUpdate: _showStatus,
       );
+      phoneToCall = leaderPhone;
+      // Offline mới cần soạn SMS, online chỉ gọi điện
+      smsContacts = (!isOnline && leaderPhone.isNotEmpty) ? [leaderPhone] : [];
     }
 
     // Đặt lại UI trước khi mở app ngoài để tránh màn hình đen khi quay lại
     if (mounted) setState(() => _isSending = false);
 
-    // Gọi điện khi user quay lại từ app SMS (xử lý trong didChangeAppLifecycleState)
-    if (phoneToCall != null) _pendingCallPhone = phoneToCall;
+    if (phoneToCall.isNotEmpty) {
+      await _sosService.makeCall(phoneToCall);
+      if (smsContacts.isNotEmpty) {
+        _pendingAction = () => _sosService.openEmergencySms(data, smsContacts);
+      }
+    }
   }
 
   @override
@@ -313,23 +324,27 @@ class _SosScreenState extends State<SosScreen>
           Positioned(
             top: 40,
             right: 16,
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.5),
-                shape: BoxShape.circle,
-              ),
-              child: IconButton(
-                icon: const Icon(Icons.history, color: Colors.white, size: 26),
-                tooltip: 'Xem lịch sử SOS',
-                onPressed: () {
-                  final currentRoomId =
-                      Provider.of<MembersProvider>(context, listen: false).roomId ?? '';
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (context) => SosHistoryScreen(roomId: currentRoomId)),
-                  );
-                },
-              ),
+            child: Column(
+              children: [
+                Container(
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.5),
+                    shape: BoxShape.circle,
+                  ),
+                  child: IconButton(
+                    icon: const Icon(Icons.history, color: Colors.white, size: 26),
+                    tooltip: 'Xem lịch sử SOS',
+                    onPressed: () {
+                      final currentRoomId =
+                          Provider.of<MembersProvider>(context, listen: false).roomId ?? '';
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (context) => SosHistoryScreen(roomId: currentRoomId)),
+                      );
+                    },
+                  ),
+                ),
+              ],
             ),
           ),
         ],

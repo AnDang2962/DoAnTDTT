@@ -28,17 +28,20 @@ import '../../../core/providers/voice_command_provider.dart';
 import '../../map_routing/services/gemini_ai_api.dart';
 import '../../map_routing/services/geocoding_api.dart';
 import '../../voice/services/voice_action_dispatcher.dart';
+import '../../sos_emergency/widgets/sos_map_overlay.dart' show SOSMapOverlay;
 
 class GroupRadarOverlay extends StatefulWidget {
   final String roomId;
   final UserModel currentUser;
   final VoidCallback onLeaveRoom;
+  final void Function(double lat, double lng)? onSosNavigate;
 
   const GroupRadarOverlay({
     super.key,
     required this.roomId,
     required this.currentUser,
     required this.onLeaveRoom,
+    this.onSosNavigate,
   });
 
   @override
@@ -54,8 +57,8 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
   StreamSubscription? _memberLocationsSub;
   StreamSubscription? _warningsSub;
   Timer? _riskRefreshTimer;
+  int _lastNavStoppedAt = 0;
 
-  List<WarningMarker> _realtimeRisks = [];
   List<WarningMarker> _crossGroupRisks = [];
 
   mapbox.Position? _myLastPos;
@@ -88,6 +91,7 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
   String _groupStopLabel = 'Leader';
 
   int _lastGroupMsgTs = 0;
+  int _lastSosTs = 0;
   List<String> _customMessages = [];
 
   bool _isLoading = false;
@@ -176,10 +180,7 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
     if (now - _lastRiskCheckMs < 5000) return;
     _lastRiskCheckMs = now;
 
-    final seen = <String>{};
-    final allRisks = [..._realtimeRisks, ..._crossGroupRisks]
-        .where((r) => seen.add(r.id))
-        .toList();
+    final allRisks = _crossGroupRisks;
     final announcements = <String>[];
     for (final risk in allRisks) {
       if (_announcedRiskIds.contains(risk.id)) continue;
@@ -293,6 +294,77 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
         }
       }
 
+      final sosData = data['sos'] as Map<String, dynamic>?;
+      if (sosData != null) {
+        final ts = (sosData['ts'] as num?)?.toInt() ?? 0;
+        final senderId = sosData['senderId']?.toString() ?? '';
+        if (ts > _lastSosTs && senderId != widget.currentUser.id && mounted) {
+          _lastSosTs = ts;
+          final lat = (sosData['lat'] as num?)?.toDouble();
+          final lng = (sosData['lng'] as num?)?.toDouble();
+          final battery = sosData['battery']?.toString() ?? 'Không rõ';
+          final senderName = sosData['senderName']?.toString() ?? 'Thành viên';
+          unawaited(TtsService().speak('Báo động SOS! $senderName đang cần giúp đỡ!'));
+          showDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (dialogCtx) => AlertDialog(
+              backgroundColor: Colors.red.shade50,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              title: const Row(
+                children: [
+                  Icon(Icons.warning_amber_rounded, color: Colors.red, size: 30),
+                  SizedBox(width: 10),
+                  Text('BÁO ĐỘNG SOS!', style: TextStyle(color: Colors.red)),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '$senderName đang cần giúp đỡ!',
+                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    battery == '-1' ? 'Pin nạn nhân: Không rõ' : 'Pin nạn nhân: $battery%',
+                    style: TextStyle(color: Colors.red.shade700, fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogCtx).pop(),
+                  child: const Text('BỎ QUA', style: TextStyle(color: Colors.grey)),
+                ),
+                if (lat != null && lng != null)
+                  ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                    onPressed: () {
+                      Navigator.of(dialogCtx).pop();
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => SOSMapOverlay(
+                            latitude: lat,
+                            longitude: lng,
+                            onNavigateToVictim: () {
+                              widget.onSosNavigate?.call(lat, lng);
+                            },
+                          ),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.map, color: Colors.white),
+                    label: const Text('TỚI CỨU NGAY', style: TextStyle(color: Colors.white)),
+                  ),
+              ],
+            ),
+          );
+        }
+      }
+
       final routeData = data['route'] as Map<String, dynamic>?;
       if (routeData != null && routeData['polyline'] != null) {
         final polyList = routeData['polyline'] as List;
@@ -339,17 +411,17 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
             ));
           }
 
-          final polylineData = polyList
+          _polylineData = polyList
               .map<Map<String, double>>((p) => {
                     'lng': (p['lng'] as num).toDouble(),
                     'lat': (p['lat'] as num).toDouble(),
                   })
               .toList();
           _crossGroupRisks = await _warningRepo.getRiskLabelsNearRoute(
-            polyline: polylineData,
+            polyline: _polylineData,
           );
           _redrawAllRisks();
-          _startCrossGroupRiskTimer(polylineData);
+          _startCrossGroupRiskTimer(_polylineData);
           _announcedRiskIds.clear();
           _lastRiskCheckMs = 0;
           if (_myLastPos == null) {
@@ -360,6 +432,39 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
           }
           _checkNearbyRisks();
           await _loadWeatherAlongRoute(coords);
+        }
+      }
+
+      // Leader broadcasts stop → tất cả member tự lưu lịch sử và clear navigation
+      if (widget.currentUser.role != UserRole.leader) {
+        final navStopped = data['navigationStopped'] as Map<String, dynamic>?;
+        final stoppedAt = (navStopped?['at'] as num?)?.toInt() ?? 0;
+        if (stoppedAt > _lastNavStoppedAt) {
+          _lastNavStoppedAt = stoppedAt;
+          final snapshot = _captureNavSnapshot();
+          if (snapshot != null) unawaited(_saveTripFromSnapshot(snapshot));
+          if (mounted) {
+            _riskRefreshTimer?.cancel();
+            final mp = context.read<MapStateProvider>();
+            await mp.clearAll(keepMemberMarkers: true);
+            if (!mounted) return;
+            mp.clearRoutes();
+            _arrivedNotified = false;
+            _arrivedMemberUids.clear();
+            _announcedRiskIds.clear();
+            _lastRiskCheckMs = 0;
+            setState(() {
+              _lastDestPos = null;
+              _destPos = null;
+              _polylineData = [];
+              _waypoints = [];
+              _loadedRouteKey = null;
+            });
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('Leader đã kết thúc chuyến đi'),
+              duration: Duration(seconds: 3),
+            ));
+          }
         }
       }
     });
@@ -403,38 +508,37 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
     _warningsSub = _warningRepo.listenToRoomWarnings(widget.roomId).listen((warnings) {
       if (!mounted) return;
 
-      // Phát hiện risk mới (chưa có trong _knownRiskIds)
       final newRisks = warnings.where((r) => !_knownRiskIds.contains(r.id)).toList();
-
-      // Lần đầu load (snapshot ban đầu) — chỉ ghi nhận, không notify
       final isInitialLoad = _knownRiskIds.isEmpty && warnings.isNotEmpty;
       for (final r in warnings) { _knownRiskIds.add(r.id); }
 
-      _realtimeRisks = warnings;
-      _redrawAllRisks();
-
-      if (!isInitialLoad) {
-        for (final r in newRisks) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('${r.emoji} Leader vừa báo cáo: ${r.vi}'),
-            duration: const Duration(seconds: 4),
-          ));
+      if (newRisks.isNotEmpty) {
+        // Snackbar chỉ hiện khi không phải snapshot ban đầu
+        if (!isInitialLoad) {
+          for (final r in newRisks) {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text('${r.emoji} Leader vừa báo cáo: ${r.vi}'),
+              duration: const Duration(seconds: 4),
+            ));
+          }
         }
-      }
-
-      if (_mapProvider?.isNavigating == true) {
-        _lastRiskCheckMs = 0;
-        _checkNearbyRisks();
+        // Luôn refresh map khi có risk mới (kể cả lần đầu load)
+        if (_polylineData.isNotEmpty) {
+          _warningRepo.getRiskLabelsNearRoute(polyline: _polylineData).then((risks) {
+            if (!mounted) return;
+            _crossGroupRisks = risks;
+            _redrawAllRisks();
+            _lastRiskCheckMs = 0;
+            _checkNearbyRisks();
+          });
+        }
       }
     });
   }
 
   void _redrawAllRisks() {
     if (!mounted) return;
-    final merged = <String, WarningMarker>{};
-    for (final r in _realtimeRisks) { merged[r.id] = r; }
-    for (final r in _crossGroupRisks) { merged[r.id] = r; }
-    context.read<MapStateProvider>().drawRiskMarkers(merged.values.toList(), _memberLocations);
+    context.read<MapStateProvider>().drawRiskMarkers(_crossGroupRisks, _memberLocations);
   }
 
   void _updateMapMembers() {
@@ -829,8 +933,9 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
     await _loadWeatherAlongRoute(positions);
 
     _crossGroupRisks = await _warningRepo.getRiskLabelsNearRoute(polyline: _polylineData);
-    if (_crossGroupRisks.isNotEmpty && mounted) {
-      _redrawAllRisks();
+    if (!mounted) return;
+    _redrawAllRisks();
+    if (_crossGroupRisks.isNotEmpty) {
       _showSnackbar('Phát hiện ${_crossGroupRisks.length} cảnh báo trên lộ trình!');
     }
   }
@@ -1683,28 +1788,32 @@ class _GroupRadarOverlayState extends State<GroupRadarOverlay> {
                           ),
                           const SizedBox(width: 6),
                         ],
-                        FloatingActionButton.small(
-                          heroTag: 'grp_stop_nav_fab',
-                          onPressed: () async {
-                            _riskRefreshTimer?.cancel();
-                            await context.read<MapStateProvider>().clearAll(keepMemberMarkers: true);
-                            mapProvider.clearRoutes();
-                            _arrivedNotified = false;
-                            _arrivedMemberUids.clear();
-                            _announcedRiskIds.clear();
-                            _lastRiskCheckMs = 0;
-                            setState(() {
-                              _lastDestPos = null;
-                              _destPos = null;
-                              _polylineData = [];
-                              _waypoints = [];
-                              _addingWaypointByMap = false;
-                              _loadedRouteKey = null;
-                            });
-                          },
-                          backgroundColor: Colors.redAccent,
-                          child: const Icon(Icons.close, color: Colors.white),
-                        ),
+                        if (widget.currentUser.role == UserRole.leader)
+                          FloatingActionButton.small(
+                            heroTag: 'grp_stop_nav_fab',
+                            onPressed: () async {
+                              _riskRefreshTimer?.cancel();
+                              final snapshot = _captureNavSnapshot();
+                              if (snapshot != null) unawaited(_saveTripFromSnapshot(snapshot));
+                              unawaited(_roomRepo.setNavigationStopped(widget.roomId));
+                              await context.read<MapStateProvider>().clearAll(keepMemberMarkers: true);
+                              mapProvider.clearRoutes();
+                              _arrivedNotified = false;
+                              _arrivedMemberUids.clear();
+                              _announcedRiskIds.clear();
+                              _lastRiskCheckMs = 0;
+                              setState(() {
+                                _lastDestPos = null;
+                                _destPos = null;
+                                _polylineData = [];
+                                _waypoints = [];
+                                _addingWaypointByMap = false;
+                                _loadedRouteKey = null;
+                              });
+                            },
+                            backgroundColor: Colors.redAccent,
+                            child: const Icon(Icons.close, color: Colors.white),
+                          ),
                       ],
                     ),
                   ],

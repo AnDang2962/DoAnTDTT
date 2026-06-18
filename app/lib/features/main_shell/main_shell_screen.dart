@@ -10,7 +10,6 @@ import 'package:route_mate_app/features/map_routing/screens/routing_panel.dart';
 import 'package:route_mate_app/features/sos_emergency/screens/sos_screen.dart';
 import 'package:route_mate_app/features/profile/screens/profile_screen.dart';
 import 'package:route_mate_app/features/group_radar/presentation/providers/members_provider.dart';
-import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mapbox;
 import 'package:route_mate_app/core/services/solo_room_service.dart';
 import 'package:route_mate_app/core/services/voice_service.dart';
 import 'package:route_mate_app/core/services/wake_word_service.dart';
@@ -18,7 +17,7 @@ import 'package:route_mate_app/core/providers/voice_command_provider.dart';
 import 'widgets/voice_fab.dart';
 
 import 'package:firebase_messaging/firebase_messaging.dart';
-import '../sos_emergency/widgets/sos_map_overlay.dart' show SOSMapOverlay;
+import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mapbox;
 
 class MainShellScreen extends StatefulWidget {
   const MainShellScreen({super.key});
@@ -43,9 +42,6 @@ class _MainShellScreenState extends State<MainShellScreen> {
     _wakeWord.init();
     SoloRoomService.ensureSoloRoom();
     FirebaseMessaging.instance.requestPermission();
-    FirebaseMessaging.onMessage.listen(_handleFcmMessage);
-    FirebaseMessaging.onMessageOpenedApp.listen(_handleFcmTap);
-    _checkInitialMessage();
   }
 
   @override
@@ -159,6 +155,16 @@ class _MainShellScreenState extends State<MainShellScreen> {
     ctx.read<VoiceCommandProvider>().dispatch(text);
   }
 
+  void _navigateToSosVictim(double lat, double lng) {
+    final ctx = _shellCtx;
+    if (ctx == null || !mounted) return;
+    final members = ctx.read<MembersProvider>();
+    final mapProvider = ctx.read<MapStateProvider>();
+    mapProvider.setSosRoutingTarget(mapbox.Position(lng, lat));
+    final isLeader = members.userRole == 'leader' && members.roomId != null;
+    setState(() => _currentIndex = isLeader ? 1 : 0);
+  }
+
   void _showModeToast(VoiceMode mode) {
     final msg = mode == VoiceMode.wakeWord
         ? 'Chế độ Wake Word — nói "routemate" để kích hoạt'
@@ -166,135 +172,6 @@ class _MainShellScreenState extends State<MainShellScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(msg), duration: const Duration(seconds: 3)),
     );
-  }
-
-  ({double lat, double lng})? _parseSosLatLng(Map<String, dynamic> data) {
-    final lat = double.tryParse(data['lat']?.toString() ?? '');
-    final lng = double.tryParse(data['lng']?.toString() ?? '');
-    if (lat == null || lng == null) return null;
-    return (lat: lat, lng: lng);
-  }
-
-  void _handleFcmMessage(RemoteMessage message) {
-    if (!mounted) return;
-    final data = message.data;
-    if (data['type'] != 'SOS') return;
-    final pos = _parseSosLatLng(data);
-    final double? lat = pos?.lat;
-    final double? lng = pos?.lng;
-    final String battery = data['battery']?.toString() ?? 'Không rõ';
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogContext) => AlertDialog(
-        backgroundColor: Colors.red.shade50,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Row(
-          children: [
-            Icon(Icons.warning_amber_rounded, color: Colors.red, size: 30),
-            SizedBox(width: 10),
-            Text('BÁO ĐỘNG SOS!', style: TextStyle(color: Colors.red)),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              message.notification?.body ?? 'Có thành viên trong đoàn đang gặp nguy hiểm!',
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              battery == '-1' ? 'Pin nạn nhân: Không rõ' : 'Pin nạn nhân: $battery%',
-              style: TextStyle(color: Colors.red.shade700, fontWeight: FontWeight.w600),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('BỎ QUA', style: TextStyle(color: Colors.grey)),
-          ),
-          if (lat != null && lng != null)
-            ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-              onPressed: () {
-                Navigator.of(dialogContext).pop();
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => SOSMapOverlay(
-                      latitude: lat,
-                      longitude: lng,
-                      onNavigateToVictim: () => _navigateToSosVictim(lat, lng),
-                    ),
-                  ),
-                );
-              },
-              icon: const Icon(Icons.map, color: Colors.white),
-              label: const Text('TỚI CỨU NGAY', style: TextStyle(color: Colors.white)),
-            ),
-        ],
-      ),
-    );
-  }
-
-  // App đang nền → user tap notification → navigate thẳng vào SOSMapOverlay
-  void _handleFcmTap(RemoteMessage message) {
-    final data = message.data;
-    if (data['type'] != 'SOS') return;
-    final pos = _parseSosLatLng(data);
-    if (pos == null || !mounted) return;
-    final (lat: lat, lng: lng) = pos;
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => SOSMapOverlay(
-          latitude: lat,
-          longitude: lng,
-          onNavigateToVictim: () => _navigateToSosVictim(lat, lng),
-        ),
-      ),
-    );
-  }
-
-  // App bị tắt hoàn toàn → user tap notification → check và navigate
-  Future<void> _checkInitialMessage() async {
-    final message = await FirebaseMessaging.instance.getInitialMessage();
-    if (message == null) return;
-    final data = message.data;
-    if (data['type'] != 'SOS') return;
-    final pos = _parseSosLatLng(data);
-    if (pos == null) return;
-    final (lat: lat, lng: lng) = pos;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => SOSMapOverlay(
-            latitude: lat,
-            longitude: lng,
-            onNavigateToVictim: () => _navigateToSosVictim(lat, lng),
-          ),
-        ),
-      );
-    });
-  }
-
-  void _navigateToSosVictim(double lat, double lng) {
-    final ctx = _shellCtx;
-    if (ctx == null || !mounted) return;
-
-    final members = ctx.read<MembersProvider>();
-    final mapProvider = ctx.read<MapStateProvider>();
-
-    mapProvider.setSosRoutingTarget(mapbox.Position(lng, lat));
-
-    final isLeader = members.userRole == 'leader' && members.roomId != null;
-    setState(() => _currentIndex = isLeader ? 1 : 0);
   }
 
   @override
@@ -309,7 +186,10 @@ class _MainShellScreenState extends State<MainShellScreen> {
         _shellCtx = ctx;
         final screens = [
           SafeArea(child: RoutingPanel(isActive: _currentIndex == 0)),
-          RoomLobbyScreen(onGoToProfile: () => setState(() => _currentIndex = 3)),
+          RoomLobbyScreen(
+            onGoToProfile: () => setState(() => _currentIndex = 3),
+            onSosNavigate: _navigateToSosVictim,
+          ),
           const ColoredBox(color: Colors.white, child: SafeArea(child: SosScreen())),
           const ProfileScreen(),
         ];
