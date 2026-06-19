@@ -56,6 +56,7 @@ unlinked_spec.ds
 **/android/**/GeneratedPluginRegistrant.java
 **/android/key.properties
 *.jks
+!**/android/app/team_debug.jks
 
 # iOS/XCode related
 **/ios/**/*.mode1v3
@@ -117,3 +118,14 @@ app.*.symbols
 !**/ios/**/default.perspectivev3
 !/packages/flutter_tools/test/data/dart_dependencies_test/**/.packages
 !/dev/ci/**/Gemfile.lock
+
+# Secret Environment Variables
+.env
+
+# --- Rác và Bảo mật của Backend (NodeJS/Firebase) ---
+**/node_modules/
+**/.secret.local
+backend/functions/lib/
+firebase-export-*/
+
+.firebase/

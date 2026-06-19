@@ -1,0 +1,70 @@
+name: route_mate_app
+description: "RouteMate - Ứng dụng Hỗ trợ An toàn Phượt xe máy"
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.5
+
+dependencies:
+  flutter:
+    sdk: flutter
+  
+  # --- 1. LÕI HỆ THỐNG & API ---
+  provider: ^6.1.2             
+  flutter_dotenv: ^6.0.1       
+  http: ^1.6.0                 
+  google_generative_ai: ^0.4.6
+  speech_to_text: ^7.3.0
+  
+  # --- 2. BACKEND FIREBASE (v3 - tương thích iOS arm64) ---
+  firebase_core: ^3.6.0
+  firebase_auth: ^5.3.1
+  firebase_database: ^11.1.4
+  cloud_firestore: ^5.6.12
+  firebase_messaging: ^15.1.0
+  cloud_functions: ^5.6.2
+  
+  # --- 3. BẢN ĐỒ & ĐỊNH VỊ GPS ---
+  mapbox_maps_flutter: ^2.23.1 # Giữ thế độc tôn của Mapbox (Loại bỏ Google Maps của M4)
+  flutter_map: ^6.1.0
+  latlong2: ^0.9.1
+  geolocator: ^12.0.0          # Giữ bản 12.0.0 để không bị xung đột
+  flutter_compass: ^0.8.1      # Compass từ kế — xoay map theo hướng điện thoại
+  
+  # --- 4. TÍNH NĂNG SOS (Thêm từ M4) ---
+  battery_plus: ^6.0.2         # Check pin (hạ version để fix lỗi js conflict)
+  connectivity_plus: ^6.1.0    # Check mạng (Online/Offline)
+  url_launcher: ^6.3.1         # Mở SMS Fallback
+  
+  # --- 5. TIỆN ÍCH ---
+  crypto: ^3.0.6               # SHA-256 hash để tạo solo room ID
+  flutter_tts: ^4.2.0          # Text-to-Speech cho voice response
+  shared_preferences: ^2.3.5   # Lưu session phòng nhóm để khôi phục khi thoát app
+  google_sign_in: ^6.2.2       # Đăng nhập bằng tài khoản Google
+
+  # --- 6. GIAO DIỆN ---
+  cupertino_icons: ^1.0.8
+  qr_flutter: ^4.1.0            # Tạo QR code
+  mobile_scanner: ^6.0.0        # Quét QR code bằng camera
+  image_picker: ^1.1.2          # Chọn ảnh từ thư viện / camera
+  firebase_storage: ^12.3.7     # Upload ảnh avatar lên Firebase Storage
+  audioplayers: ^6.1.0          # Phát âm thanh chuông thành viên vào/ra nhóm
+  android_intent_plus: ^6.0.0
+  wakelock_plus: ^1.6.1
+
+dependency_overrides:
+  http: ^1.6.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - .env
+    - assets/images/
+    - assets/sounds/

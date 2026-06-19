@@ -1,0 +1,33 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "riskLabels",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "lat", "order": "ASCENDING" },
+        { "fieldPath": "expiresAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "riskLabels",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "reportedRoomId", "order": "ASCENDING" },
+        { "fieldPath": "category", "order": "ASCENDING" },
+        { "fieldPath": "subtype", "order": "ASCENDING" },
+        { "fieldPath": "expiresAt", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": [
+    {
+      "collectionGroup": "riskLabels",
+      "fieldPath": "expiresAt",
+      "ttl": true,
+      "indexes": [
+        { "order": "ASCENDING", "queryScope": "COLLECTION" },
+        { "order": "DESCENDING", "queryScope": "COLLECTION" }
+      ]
+    }
+  ]
+}

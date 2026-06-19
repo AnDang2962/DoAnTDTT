@@ -1,0 +1,84 @@
+import 'dart:convert';
+import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
+import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mapbox;
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:geolocator/geolocator.dart';
+
+class RouteWaypoint {
+  final mapbox.Position pos;
+  final String name;
+  const RouteWaypoint({required this.pos, required this.name});
+}
+
+class RouteUtils {
+  static Future<List<dynamic>> getMultipleMapboxRoutes(
+    mapbox.Position start,
+    mapbox.Position destination, {
+    List<mapbox.Position> viaWaypoints = const [],
+  }) async {
+    final token = dotenv.env['MAPBOX_PUBLIC_KEY'] ?? '';
+    final allStops = [start, ...viaWaypoints, destination]
+        .map((p) => '${p.lng},${p.lat}')
+        .join(';');
+    final url = 'https://api.mapbox.com/directions/v5/mapbox/driving/$allStops?geometries=geojson&alternatives=true&overview=full&access_token=$token';
+
+    try {
+      final response = await http.get(Uri.parse(url));
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['routes'] != null && data['routes'].isNotEmpty) {
+          return data['routes'];
+        }
+      }
+    } catch (e) {
+      debugPrint("Lỗi API Mapbox lấy nhiều lộ trình: $e");
+    }
+    return [];
+  }
+
+  /// Giảm số điểm polyline xuống tối đa [maxPoints] bằng cách lấy đều.
+  /// Dùng trước khi gửi lên backend (giới hạn 5000 điểm).
+  static List<Map<String, double>> downsamplePolyline(
+    List<Map<String, double>> points, {
+    int maxPoints = 500,
+  }) {
+    if (points.length <= maxPoints) return points;
+    final step = points.length / maxPoints;
+    final result = <Map<String, double>>[];
+    for (int i = 0; i < maxPoints; i++) {
+      result.add(points[(i * step).floor()]);
+    }
+    // Luôn giữ điểm cuối
+    if (result.last != points.last) result.add(points.last);
+    return result;
+  }
+
+  /// Trích xuất các điểm kiểm tra thời tiết dọc theo lộ trình.
+  /// Thuật toán: Đi dọc theo lộ trình, cứ cộng dồn đủ 50km thì lấy ra 1 điểm để check thời tiết.
+  static List<mapbox.Position> extractWaypointsEvery50Km(List<mapbox.Position> coords) {
+    List<mapbox.Position> waypoints = [];
+    if (coords.isEmpty) return waypoints;
+
+    double accumulatedDistance = 0.0;
+    
+    // Duyệt qua từng đoạn thẳng nhỏ cấu tạo nên lộ trình
+    for (int i = 0; i < coords.length - 1; i++) {
+      // Tính khoảng cách của đoạn thẳng hiện tại
+      double dist = Geolocator.distanceBetween(
+        coords[i].lat.toDouble(), coords[i].lng.toDouble(),
+        coords[i+1].lat.toDouble(), coords[i+1].lng.toDouble()
+      );
+      accumulatedDistance += dist;
+
+      // Nếu tổng khoảng cách đã đi qua đạt 50,000 mét (50km)
+      if (accumulatedDistance >= 50000) { 
+        // Lấy điểm này làm điểm check thời tiết
+        waypoints.add(coords[i+1]);
+        // Reset lại khoảng cách để đo tiếp 50km tiếp theo
+        accumulatedDistance = 0.0;
+      }
+    }
+    return waypoints;
+  }
+}
