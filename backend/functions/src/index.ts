@@ -8,13 +8,12 @@
 import { initializeApp } from 'firebase-admin/app';
 import { onRequest } from 'firebase-functions/v2/https';
 
-// Khi chạy emulator: chỉ định namespace RTDB rõ ràng để khớp với client.
-// Khi production: FIREBASE_CONFIG tự cấu hình → để undefined.
 const dbHost = process.env.FIREBASE_DATABASE_EMULATOR_HOST;
 const projectId = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT;
+const RTDB_URL = 'https://routemate-9e33b-default-rtdb.asia-southeast1.firebasedatabase.app';
 
 initializeApp({
-  databaseURL: dbHost ? `http://${dbHost}?ns=${projectId}` : undefined,
+  databaseURL: dbHost ? `http://${dbHost}?ns=${projectId}` : RTDB_URL,
 });
 
 // === Module 1: SOS Broadcast ===

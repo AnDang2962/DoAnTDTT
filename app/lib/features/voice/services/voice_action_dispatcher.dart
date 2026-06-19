@@ -5,7 +5,8 @@ import 'package:http/http.dart' as http;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mapbox;
 import 'package:provider/provider.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../../../core/services/tts_service.dart';
 import '../../../features/main_map/providers/map_state_provider.dart';
@@ -37,6 +38,8 @@ class VoiceActionDispatcher {
 
   final _sos = SosService();
   final _tts = TtsService();
+  bool _isSending = false;
+  _SosPendingCallObserver? _pendingCallObserver;
 
   VoiceActionDispatcher({
     required this.context,
@@ -72,7 +75,7 @@ class VoiceActionDispatcher {
 
       switch (action) {
         case 'send_sos':
-          await _handleSendSos(params, responseText);
+          await _handleSendSos();
           break;
         case 'check_weather':
           await _handleCheckWeather(responseText);
@@ -108,31 +111,78 @@ class VoiceActionDispatcher {
           await _tts.speak(message.replaceAll(RegExp(r'[^\p{L}\p{N}\s,.!?]', unicode: true), '').trim());
           break;
         default:
-          if (responseText.isNotEmpty) _showSnackbar(responseText);
-          if (responseText.isNotEmpty) await _tts.speak(responseText);
+          if (responseText.isNotEmpty) {
+            _showSnackbar(responseText);
+            await _tts.speak(responseText);
+          }
       }
     } catch (_) {
       _showSnackbar('Có lỗi xảy ra khi thực hiện yêu cầu.');
     }
   }
 
-  Future<void> _handleSendSos(Map<String, dynamic> params, String responseText) async {
-    if (!isInGroup) {
-      _showSnackbar('Đang gọi 113...');
-      await _tts.speak('Đang gọi một một ba, giữ bình tĩnh.');
-      await launchUrl(Uri.parse('tel:113'));
-      return;
-    }
+  Future<void> _handleSendSos() async {
+    if (_isSending) return;
+    _isSending = true;
+    try {
+      final data = await _sos.collectEmergencyData();
 
-    final String leaderPhone = Provider.of<MembersProvider>(context, listen: false).leaderPhoneNumber ?? '';
-    
-    _showSnackbar('Đang phát tín hiệu SOS...');
-    await _tts.speak('Đang gửi SOS đến nhóm.');
-    await _sos.sendEmergencySignal(
-      roomId: roomId,
-      leaderPhoneNumber: leaderPhone,
-      onStatusUpdate: (msg, _) => _showSnackbar(msg),
-    );
+      if (!isInGroup) {
+        _showSnackbar('Đang liên hệ khẩn cấp...');
+        await _tts.speak('Đang gọi cứu hộ, giữ bình tĩnh.');
+        final contacts = await _getEmergencyContacts();
+        final smsContacts = contacts.isNotEmpty ? contacts : [SosService.fallbackEmergencyContact];
+        final phone = smsContacts.first;
+        await _sos.makeCall(phone);
+        _callOnResume(() => _sos.openEmergencySms(data, smsContacts));
+        return;
+      }
+
+      final String leaderPhone = Provider.of<MembersProvider>(context, listen: false).leaderPhoneNumber ?? '';
+      _showSnackbar('Đang thu thập tọa độ và phát tín hiệu...', color: Colors.blue);
+      await _tts.speak('Đang gửi SOS đến nhóm.');
+      await _sos.sendGroupFcmNotification(
+        roomId: roomId,
+        data: data,
+        onStatusUpdate: (msg, color) => _showSnackbar(msg, color: color),
+      );
+      if (leaderPhone.isNotEmpty) {
+        await _sos.makeCall(leaderPhone);
+        _callOnResume(() => _sos.openEmergencySms(data, [leaderPhone]));
+      }
+    } finally {
+      _isSending = false;
+    }
+  }
+
+  Future<List<String>> _getEmergencyContacts() async {
+    try {
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (uid == null) return [];
+      final doc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+      final contacts = doc.data()?['emergencyContacts'];
+      if (contacts is List) {
+        return contacts.map((e) => e.toString()).where((s) => s.isNotEmpty).toList();
+      }
+    } catch (e) {
+      debugPrint('Lỗi lấy emergency contacts: $e');
+    }
+    return [];
+  }
+
+  void _callOnResume(VoidCallback action) {
+    if (_pendingCallObserver != null) {
+      WidgetsBinding.instance.removeObserver(_pendingCallObserver!);
+      _pendingCallObserver = null;
+    }
+    late _SosPendingCallObserver obs;
+    obs = _SosPendingCallObserver(onResume: () {
+      WidgetsBinding.instance.removeObserver(obs);
+      _pendingCallObserver = null;
+      action();
+    });
+    _pendingCallObserver = obs;
+    WidgetsBinding.instance.addObserver(obs);
   }
 
   Future<void> _handleCheckWeather(String responseText) async {
@@ -298,9 +348,17 @@ class VoiceActionDispatcher {
     );
   }
 
-  void _showSnackbar(String message) {
+  void _showSnackbar(String message, {Color? color}) {
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(context).clearSnackBars();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+        backgroundColor: color,
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 4),
+      ),
+    );
   }
 
   String _nearbyTitle(String? placeType) {
@@ -314,5 +372,15 @@ class VoiceActionDispatcher {
       'mechanic': 'Tiệm sửa xe gần đây',
     };
     return titles[placeType] ?? 'Địa điểm gần đây';
+  }
+}
+
+class _SosPendingCallObserver with WidgetsBindingObserver {
+  final VoidCallback onResume;
+  _SosPendingCallObserver({required this.onResume});
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) onResume();
   }
 }

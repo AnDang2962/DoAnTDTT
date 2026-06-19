@@ -52,6 +52,7 @@ dependencies:
   firebase_storage: ^12.3.7     # Upload ảnh avatar lên Firebase Storage
   audioplayers: ^6.1.0          # Phát âm thanh chuông thành viên vào/ra nhóm
   android_intent_plus: ^6.0.0
+  wakelock_plus: ^1.6.1
 
 dependency_overrides:
   http: ^1.6.0

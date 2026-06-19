@@ -1,6 +1,7 @@
 import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_database/firebase_database.dart';
@@ -26,7 +27,7 @@ import 'features/main_shell/main_shell_screen.dart';
 ///   - Release + emulator (cho demo 2 máy thật):
 ///     $ flutter run --release \
 ///         --dart-define=USE_EMULATOR=true \
-///         --dart-define=MAC_LAN_IP=192.168.2.14
+///         --dart-define=MAC_LAN_IP=192.168.1.21
 ///
 ///   - Production (sau này khi deploy backend):
 ///     $ flutter run --release
@@ -36,7 +37,7 @@ import 'features/main_shell/main_shell_screen.dart';
 const bool _useEmulator =
     bool.fromEnvironment('USE_EMULATOR', defaultValue: kDebugMode);
 const String _macLanIp =
-    String.fromEnvironment('MAC_LAN_IP', defaultValue: '172.20.10.8');
+    String.fromEnvironment('MAC_LAN_IP', defaultValue: '192.168.1.21');
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -104,8 +105,36 @@ Future<void> main() async {
   runApp(const MyApp());
 }
 
-class MyApp extends StatelessWidget {
+class MyApp extends StatefulWidget {
   const MyApp({super.key});
+
+  @override
+  State<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    WakelockPlus.enable();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    WakelockPlus.disable();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      WakelockPlus.enable();
+    } else if (state == AppLifecycleState.paused) {
+      WakelockPlus.disable();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {

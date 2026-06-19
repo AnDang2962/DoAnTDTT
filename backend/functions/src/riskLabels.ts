@@ -500,7 +500,7 @@ export const getRiskLabelsNearRoute = onCall<
   const bufferKm =
     typeof request.data?.bufferKm === 'number'
       ? requireNumber(request.data.bufferKm, 'bufferKm', { min: 0.1, max: 50 })
-      : 3.0; // 3km mỗi bên (đủ để cover lệch route nhẹ)
+      : 1.0; // 1km mỗi bên — đủ cho xe máy, tránh hiện risk đường song song
   const minSeverity =
     typeof request.data?.minSeverity === 'number'
       ? requireNumber(request.data.minSeverity, 'minSeverity', {
@@ -524,7 +524,6 @@ export const getRiskLabelsNearRoute = onCall<
     .collection('riskLabels')
     .where('lat', '>=', minLat)
     .where('lat', '<=', maxLat)
-    .where('expiresAt', '>', Timestamp.fromMillis(nowMs))
     .limit(500)
     .get();
 
@@ -538,7 +537,11 @@ export const getRiskLabelsNearRoute = onCall<
       lng: number;
       note: string;
       createdAt: Timestamp;
+      expiresAt: Timestamp;
     };
+
+    // Bỏ qua risk đã hết hạn (filter thay vì dùng composite index)
+    if (d.expiresAt && d.expiresAt.toMillis() <= nowMs) continue;
 
     if (d.lng < minLng || d.lng > maxLng) continue;
 

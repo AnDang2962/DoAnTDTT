@@ -55,7 +55,7 @@ const DEAD_TOKEN_ERRORS = new Set([
 ]);
 
 export const sendSOS = onCall<SosRequest, Promise<SosResult>>(
-  { region: 'asia-southeast1', timeoutSeconds: 30, memory: '256MiB' },
+  { region: 'asia-southeast1', timeoutSeconds: 30, memory: '256MiB', invoker: 'public' },
   async (request) => {
     const log = makeLogger('sendSOS');
     const startMs = Date.now();

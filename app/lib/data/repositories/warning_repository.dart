@@ -15,7 +15,7 @@ class WarningRepository {
   Future<List<WarningMarker>> getRiskLabelsNearRoute({
     String? roomId,
     List<Map<String, double>>? polyline,
-    double bufferKm = 3.0,
+    double bufferKm = 1.0,
     double minSeverity = 0.1,
   }) async {
     assert(roomId != null || polyline != null,

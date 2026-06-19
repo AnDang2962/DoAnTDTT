@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_database/firebase_database.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart';
 import '../models/user_model.dart';
 import 'package:route_mate_app/core/services/firebase_functions_helper.dart';
 
@@ -7,32 +9,48 @@ class RoomRepository {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseDatabase _rtdb = FirebaseDatabase.instance;
 
+  Future<String?> _getFcmToken() async {
+    try {
+      if (defaultTargetPlatform == TargetPlatform.iOS) {
+        final apns = await FirebaseMessaging.instance.getAPNSToken();
+        if (apns == null) return null;
+      }
+      return await FirebaseMessaging.instance.getToken();
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<String?> createRoom(UserModel creator) async {
     try {
+      final fcmToken = await _getFcmToken() ?? '';
       final result = await backendFunctions
           .httpsCallable('createRoom')
           .call<Map<String, dynamic>>({
         'displayName': creator.name,
-        'fcmToken': 'demo_fake_fcm_${DateTime.now().millisecondsSinceEpoch}',
+        'fcmToken': fcmToken,
       });
       final data = Map<String, dynamic>.from(result.data);
       return data['roomId']?.toString();
-    } catch (_) {
+    } catch (e) {
+      debugPrint('❌ createRoom error: $e');
       return null;
     }
   }
 
   Future<bool> joinRoom(String roomId, UserModel user) async {
     try {
+      final fcmToken = await _getFcmToken() ?? '';
       await backendFunctions
           .httpsCallable('joinRoom')
           .call<Map<String, dynamic>>({
         'roomId': roomId.toUpperCase(),
         'displayName': user.name,
-        'fcmToken': 'demo_fake_fcm_${DateTime.now().millisecondsSinceEpoch}',
+        'fcmToken': fcmToken,
       });
       return true;
-    } catch (_) {
+    } catch (e) {
+      debugPrint('❌ joinRoom error: $e');
       return false;
     }
   }
@@ -122,6 +140,15 @@ class RoomRepository {
           'senderUid': senderUid,
           'ts': DateTime.now().millisecondsSinceEpoch,
         },
+      });
+    } catch (_) {}
+  }
+
+  Future<void> setNavigationStopped(String roomId) async {
+    try {
+      await _firestore.collection('rooms').doc(roomId).update({
+        'navigationStopped': {'at': DateTime.now().millisecondsSinceEpoch},
+        'route': FieldValue.delete(),
       });
     } catch (_) {}
   }

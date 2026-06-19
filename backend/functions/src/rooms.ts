@@ -91,10 +91,9 @@ export const createRoom = onCall<
     minLen: 1,
     maxLen: 50,
   });
-  const fcmToken = requireString(request.data?.fcmToken, 'fcmToken', {
-    minLen: 10,
-    maxLen: 500,
-  });
+  const fcmToken = typeof request.data?.fcmToken === 'string' && request.data.fcmToken.length >= 10
+    ? request.data.fcmToken
+    : '';
 
   // Optional route
   const routeInput = request.data?.route;
@@ -123,7 +122,7 @@ export const createRoom = onCall<
     memberInfo: {
       [auth.uid]: { displayName, role: 'leader' },
     },
-    fcmTokens: { [auth.uid]: fcmToken },
+    ...(fcmToken ? { fcmTokens: { [auth.uid]: fcmToken } } : {}),
     createdAt: FieldValue.serverTimestamp(),
     isActive: true,
   };
@@ -227,10 +226,9 @@ export const joinRoom = onCall<
     minLen: 1,
     maxLen: 50,
   });
-  const fcmToken = requireString(request.data?.fcmToken, 'fcmToken', {
-    minLen: 10,
-    maxLen: 500,
-  });
+  const fcmToken = typeof request.data?.fcmToken === 'string' && request.data.fcmToken.length >= 10
+    ? request.data.fcmToken
+    : '';
 
   const db = getFirestore();
   const rtdb = getDatabase();
@@ -256,7 +254,7 @@ export const joinRoom = onCall<
     roomRef.update({
       members: FieldValue.arrayUnion(auth.uid),
       [`memberInfo.${auth.uid}`]: { displayName, role: 'member' },
-      [`fcmTokens.${auth.uid}`]: fcmToken,
+      ...(fcmToken ? { [`fcmTokens.${auth.uid}`]: fcmToken } : {}),
     }),
     rtdb.ref(`roomMembers/${roomId}/${auth.uid}`).set(true),
   ]);
