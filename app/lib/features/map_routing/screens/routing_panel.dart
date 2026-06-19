@@ -61,10 +61,7 @@ class _RoutingPanelState extends State<RoutingPanel> {
     final mapProvider = context.read<MapStateProvider>();
     if (mapProvider.isGroupModeActive) return;
     if (_previewDestPos == null && !mapProvider.isNavigating) return;
-    final merged = <String, WarningMarker>{};
-    for (final r in _realtimeRisks) { merged[r.id] = r; }
-    for (final r in _crossGroupRisks) { merged[r.id] = r; }
-    mapProvider.drawRiskMarkers(merged.values.toList(), {});
+    mapProvider.drawRiskMarkers(_crossGroupRisks, {});
   }
 
   VoiceCommandProvider? _voiceProv;
@@ -133,11 +130,17 @@ class _RoutingPanelState extends State<RoutingPanel> {
 
     _riskSub = _warningRepo.listenToRoomWarnings(soloRoomId).listen((risks) {
       if (!mounted) return;
+      final prevCount = _realtimeRisks.length;
       _realtimeRisks = risks;
-      _redrawAllRisks();
-      if (context.read<MapStateProvider>().isNavigating) {
-        _lastRiskCheckMs = 0;
-        _checkNearbyRisks();
+      // Chỉ refresh near-route risks khi có risk mới xuất hiện
+      if (risks.length > prevCount && _polylineData.isNotEmpty) {
+        _warningRepo.getRiskLabelsNearRoute(polyline: _polylineData).then((nearby) {
+          if (!mounted) return;
+          _crossGroupRisks = nearby;
+          _redrawAllRisks();
+          _lastRiskCheckMs = 0;
+          _checkNearbyRisks();
+        });
       }
     });
   }
@@ -193,10 +196,7 @@ class _RoutingPanelState extends State<RoutingPanel> {
     if (now - _lastRiskCheckMs < 5000) return;
     _lastRiskCheckMs = now;
 
-    final seen = <String>{};
-    final allRisks = [..._realtimeRisks, ..._crossGroupRisks]
-        .where((r) => seen.add(r.id))
-        .toList();
+    final allRisks = _crossGroupRisks;
     final announcements = <String>[];
     for (final risk in allRisks) {
       if (_announcedRiskIds.contains(risk.id)) continue;
@@ -484,8 +484,9 @@ class _RoutingPanelState extends State<RoutingPanel> {
     }
 
     _crossGroupRisks = await _warningRepo.getRiskLabelsNearRoute(polyline: _polylineData);
-    if (_crossGroupRisks.isNotEmpty && mounted) {
-      _redrawAllRisks();
+    if (!mounted) return;
+    _redrawAllRisks();
+    if (_crossGroupRisks.isNotEmpty) {
       _showSnackbar('Phát hiện ${_crossGroupRisks.length} cảnh báo nguy hiểm trên lộ trình!');
     }
   }

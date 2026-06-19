@@ -224,9 +224,9 @@ class MapStateProvider extends ChangeNotifier {
     if (passed.length >= 2) {
       await _polylineManager!.create(mapbox.PolylineAnnotationOptions(
         geometry: mapbox.LineString(coordinates: passed),
-        lineColor: 0xFF616161,
-        lineWidth: 4.0,
-        lineOpacity: 1.0,
+        lineColor: const Color(0xFFAAAAAA).toARGB32(),
+        lineWidth: 5.0,
+        lineOpacity: 0.85,
       ));
     }
 
@@ -329,6 +329,8 @@ class MapStateProvider extends ChangeNotifier {
         }
       }
 
+      // Pause compass để tránh easeTo interrupt animation flyTo
+      _compassSub?.pause();
       _mapboxMap?.flyTo(
         mapbox.CameraOptions(
           center: mapbox.Point(
@@ -340,8 +342,11 @@ class MapStateProvider extends ChangeNotifier {
         ),
         mapbox.MapAnimationOptions(duration: 600),
       );
+      await Future.delayed(const Duration(milliseconds: 650));
+      _compassSub?.resume();
     } catch (e) {
       debugPrint('[MapStateProvider] flyToCurrentLocation error: $e');
+      _compassSub?.resume();
     }
   }
 
